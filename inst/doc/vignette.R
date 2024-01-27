@@ -2,6 +2,9 @@
 IS_GITHUB <- Sys.getenv("IS_GITHUB") != ""
 knitr::opts_chunk$set(dpi=96,fig.width=6.5)
 
+## ---- basic_usage, eval=FALSE-------------------------------------------------
+#  results <- dist_search(x, y, max_distance = 2, nthreads = 1)
+
 ## ---- basic_plot, eval=!IS_GITHUB, out.width=400------------------------------
 library(seqtrie)
 tree <- RadixTree$new()
