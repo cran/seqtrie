@@ -1,11 +1,12 @@
 ## ---- setup, echo=FALSE-------------------------------------------------------
-IS_GITHUB <- Sys.getenv("IS_GITHUB") != ""
+GITHUB_README <- Sys.getenv("GITHUB_README") != ""
+CAN_IGRAPH_PLOT <- requireNamespace("igraph", quietly=TRUE) && requireNamespace("ggplot2", quietly=TRUE)
 knitr::opts_chunk$set(dpi=96,fig.width=6.5)
 
 ## ---- basic_usage, eval=FALSE-------------------------------------------------
 #  results <- dist_search(x, y, max_distance = 2, nthreads = 1)
 
-## ---- basic_plot, eval=!IS_GITHUB, out.width=400------------------------------
+## ---- basic_plot, eval=!GITHUB_README && CAN_IGRAPH_PLOT, out.width=400-------
 library(seqtrie)
 tree <- RadixTree$new()
 tree$insert(c("cargo", "cart", "carburetor", "carbuncle", "bar", "zebra"))
@@ -13,7 +14,7 @@ tree$erase("zebra")
 # tree$graph requires igraph package
 set.seed(1); tree$graph()
 
-## ---- basic_plot_output, eval=IS_GITHUB, echo=FALSE, message=FALSE, results='hide'----
+## ---- basic_plot_output, eval=GITHUB_README && CAN_IGRAPH_PLOT, echo=FALSE, message=FALSE, results='hide'----
 #  library(seqtrie)
 #  tree <- RadixTree$new()
 #  tree$insert(c("cargo", "cart", "carburetor", "carbuncle", "bar", "zebra"))
@@ -22,7 +23,7 @@ set.seed(1); tree$graph()
 #  set.seed(1); tree$graph()
 #  dev.off()
 
-## ---- basic_plot_github, eval=IS_GITHUB, echo=FALSE, results='asis'-----------
+## ---- basic_plot_github, eval=GITHUB_README, echo=FALSE, results='asis'-------
 #  cat('![](vignettes/simple_tree.png "simple_tree")')
 
 ## ---- small_cdr3_ex-----------------------------------------------------------
