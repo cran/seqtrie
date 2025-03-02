@@ -1,21 +1,20 @@
-## ---- setup, echo=FALSE-------------------------------------------------------
+## ----setup, echo=FALSE--------------------------------------------------------
 GITHUB_README <- Sys.getenv("GITHUB_README") != ""
 CAN_IGRAPH_PLOT <- requireNamespace("igraph", quietly=TRUE) && requireNamespace("ggplot2", quietly=TRUE)
 knitr::opts_chunk$set(dpi=96,fig.width=6.5)
+library(seqtrie)
 
-## ---- basic_usage, eval=FALSE-------------------------------------------------
+## ----basic_usage, eval=FALSE--------------------------------------------------
 #  results <- dist_search(x, y, max_distance = 2, nthreads = 1)
 
-## ---- basic_plot, eval=!GITHUB_README && CAN_IGRAPH_PLOT, out.width=400-------
-library(seqtrie)
+## ----basic_plot, eval=!GITHUB_README && CAN_IGRAPH_PLOT, out.width=400--------
 tree <- RadixTree$new()
 tree$insert(c("cargo", "cart", "carburetor", "carbuncle", "bar", "zebra"))
 tree$erase("zebra")
 # tree$graph requires igraph package
 set.seed(1); tree$graph()
 
-## ---- basic_plot_output, eval=GITHUB_README && CAN_IGRAPH_PLOT, echo=FALSE, message=FALSE, results='hide'----
-#  library(seqtrie)
+## ----basic_plot_output, eval=GITHUB_README && CAN_IGRAPH_PLOT, echo=FALSE, message=FALSE, results='hide'----
 #  tree <- RadixTree$new()
 #  tree$insert(c("cargo", "cart", "carburetor", "carbuncle", "bar", "zebra"))
 #  tree$erase("zebra")
@@ -23,10 +22,10 @@ set.seed(1); tree$graph()
 #  set.seed(1); tree$graph()
 #  dev.off()
 
-## ---- basic_plot_github, eval=GITHUB_README, echo=FALSE, results='asis'-------
+## ----basic_plot_github, eval=GITHUB_README, echo=FALSE, results='asis'--------
 #  cat('![](vignettes/simple_tree.png "simple_tree")')
 
-## ---- small_cdr3_ex-----------------------------------------------------------
+## ----small_cdr3_ex------------------------------------------------------------
 # 130,000 "CDR3" sequences
 set.seed(1)
 data(covid_cdr3)
@@ -44,7 +43,7 @@ results <- dist_search(covid_cdr3, covid_cdr3, max_distance=2)
 # and target (sequences inserted into the tree).
 dplyr::filter(results, query != target)
 
-## ---- lv_search---------------------------------------------------------------
+## ----lv_search----------------------------------------------------------------
 # Full data: several seconds
 results <- tree$search(covid_cdr3, max_fraction=0.035, mode="levenshtein", nthreads=2)
 # Full data: 1 minute
@@ -52,7 +51,7 @@ results <- tree$search(covid_cdr3, max_fraction=0.06, mode="levenshtein", nthrea
 # Full data: 15-20 minutes
 results <- tree$search(covid_cdr3, max_fraction=0.15, mode="levenshtein", nthreads=2)
 
-## ---- hm_search---------------------------------------------------------------
+## ----hm_search----------------------------------------------------------------
 # Full data: 1 second
 results <- tree$search(covid_cdr3, max_fraction=0.035, mode="hamming", nthreads=2)
 # Full data: several seconds
@@ -60,14 +59,14 @@ results <- tree$search(covid_cdr3, max_fraction=0.06, mode="hamming", nthreads=2
 # Full data: 1.5 minutes
 results <- tree$search(covid_cdr3, max_fraction=0.15, mode="hamming", nthreads=2)
 
-## ---- anchored_search---------------------------------------------------------
+## ----anchored_search----------------------------------------------------------
 tree <- RadixTree$new()
 tree$insert("CARTON")
 tree$insert("CAR")
 tree$insert("CARBON")
 tree$search("CART", max_distance = 0, mode = "anchored")
 
-## ---- custom_search-----------------------------------------------------------
+## ----custom_search------------------------------------------------------------
 tree <- RadixTree$new()
 tree$insert(covid_cdr3)
 # define a custom distance matrix - generate_cost_matrix is a convienence function
@@ -92,7 +91,7 @@ identical(
   dplyr::arrange(results_tree, query, target),
   dplyr::arrange(results_frst, query, target) )
 
-## ---- prefix_search-----------------------------------------------------------
+## ----prefix_search------------------------------------------------------------
 tree <- RadixTree$new()
 tree$insert(c("cargo", "cart", "carburetor", "carbuncle", "bar"))
 tree$prefix_search("car")
