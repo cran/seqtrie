@@ -2,126 +2,256 @@
 #define seqtrie_RADIXMAP_H
 
 #include "seqtrie/utility.h"
+#include "ankerl/unordered_dense.h"
+#include "simple_array/small_array.h"
+#include <algorithm>
+#include <limits>
+#include <utility>
+
+#ifndef SEQTRIE_SMALL_ARRAY_SIZE
+#error "SEQTRIE_SMALL_ARRAY_SIZE must be defined"
+#endif
+
+// template parameters moved to macros
+#define CHAR_T char
+#define MAP_T ankerl::unordered_dense::map
+#define BRANCH_T trqwe::small_array<CHAR_T, std::allocator<CHAR_T>, size_t, std::integral_constant<size_t, SEQTRIE_SMALL_ARRAY_SIZE>>
+#define INDEX_T size_t
 
 namespace seqtrie {
 
-
-
-#define TEMPLATE_LIST template <class A, template<typename...> class M, template<typename...> class B, class I>
-#define RADIXMAP_T RadixMap<A,M,B,I>
-#define GAP_CHAR 0                                                        // '\0' any gap cost for non-affine
-#define GAP_OPEN_CHAR std::numeric_limits<A>::min()                       // '\255' gap open cost for affine
-#define GAP_EXTN_CHAR 0                                                   // '\0' extension for affine
-#define NO_ALIGN std::numeric_limits<typename MT::mapped_type>::max() / 2 // represents impossible positions in affine alignment, MT::mapped_type should be int
-
-template <class A = char, template<typename...> class M = std::map, template<typename...> class B = std::vector, class I=size_t> class RadixMap;
-template <class A = char, template<typename...> class M = std::map, template<typename...> class B = std::vector, class I=size_t> using RadixMapUPtr = std::unique_ptr<RadixMap<A,M,B,I>>;
-template <class A, template<typename...> class M, template<typename...> class B, class I>
 class RadixMap {
 public:
-  static constexpr I nullidx = std::numeric_limits<I>::max();
-  typedef A atomic_type; // '\0' and '\255' are reserved character for gaps
-  typedef B<A> branch_type;
-  typedef I index_type;
-  typedef size_t size_type;
-  typedef RadixMap<A,M,B,I> self_type;
-  typedef RadixMapUPtr<A,M,B,I> pointer_type;
-  typedef RadixMap<A,M,B,I> const * const_weak_pointer_type;
-  typedef RadixMap<A,M,B,I> * weak_pointer_type;
-  typedef M<A,RadixMapUPtr<A,M,B,I>> map_type;
-  typedef std::pair<A,A> pairchar_type;
-  typedef nonstd::span<const A> span_type;
-  typedef std::tuple<std::vector<int>, std::vector<int>, std::vector<int>> affine_col_type;
+  // fundamental types
+  typedef CHAR_T                                   atomic_type;
+  typedef BRANCH_T                                 branch_type;
+  typedef INDEX_T                                  index_type;
+  typedef size_t                                  size_type;
+  typedef RadixMap                                self_type;
+  typedef std::unique_ptr<self_type>              pointer_type;
+  typedef const self_type*                        const_weak_pointer_type;
+  typedef self_type*                              weak_pointer_type;
+  typedef MAP_T<CHAR_T,pointer_type>              map_type;
+  typedef std::pair<CHAR_T,CHAR_T>                pairchar_type;
+  typedef nonstd::span<const CHAR_T>              span_type;
+  typedef std::tuple<std::vector<int>,std::vector<int>,std::vector<int>> affine_col_type;
+
+  // constants
+  static constexpr INDEX_T nullidx     = std::numeric_limits<INDEX_T>::max();
+  static constexpr atomic_type GAP_CHAR      = CHAR_T(0);                                      // '\0' gap for non-affine
+  static constexpr atomic_type GAP_OPEN_CHAR = std::numeric_limits<atomic_type>::min();        // '\255' gap open for affine
+  static constexpr atomic_type GAP_EXTN_CHAR = CHAR_T(0);                                      // '\0' gap extension for affine
+  static constexpr int         NO_ALIGN     = std::numeric_limits<int>::max() / 2;             // impossible positions
+
 private:
-  map_type child_nodes;        // 48 bytes for std::map
-  branch_type branch;         // 24 bytes for std::vector
-  const_weak_pointer_type parent_node; // 8 bytes
-  index_type terminal_idx;    // 8 bytes
+  map_type                child_nodes;
+  branch_type             branch;
+  const_weak_pointer_type parent_node;
+  index_type              terminal_idx;
+
 public:
   RadixMap() : parent_node(nullptr), terminal_idx(nullidx) {}
-  struct path { // like an iterator, but without iteration. Later we could turn this into a real iterator. 
+
+  struct path {
     const_weak_pointer_type m;
     path() : m(nullptr) {}
     path(const_weak_pointer_type x) : m(x) {}
     const_weak_pointer_type operator->() const { return m; }
   };
-  struct search_context { // result struct for global and hamming search
+
+  struct search_context {
     std::vector<path> match;
     std::vector<int> distance;
     span_type query;
     int max_distance;
     search_context() {}
     search_context(span_type query, int max_distance) : query(query), max_distance(max_distance) {}
-    void append(const search_context & other) { // convienence method for processing similar results
-      this->match.insert(this->match.end(), other.match.begin(), other.match.end());
-      this->distance.insert(this->distance.end(), other.distance.begin(), other.distance.end());
-      this->query = other.query;
-      this->max_distance = other.max_distance;
+    void append(const search_context & other) {
+      match.insert(match.end(), other.match.begin(), other.match.end());
+      distance.insert(distance.end(), other.distance.begin(), other.distance.end());
+      query = other.query;
+      max_distance = other.max_distance;
     }
   };
+
+  struct UnitWorkspace {
+    std::vector<std::vector<int>> columns;
+
+    void initialize(std::vector<int> initial, size_t depth_hint = 0) {
+      columns.clear();
+      if(depth_hint > 0) {
+        if(columns.capacity() < depth_hint) columns.reserve(depth_hint);
+      }
+      columns.emplace_back(std::move(initial));
+    }
+
+    void ensure_child_slot(size_t depth) {
+      size_t required_size = depth + 2;
+      if(columns.size() < required_size) {
+        columns.resize(required_size);
+      }
+    }
+
+    std::vector<int> & at(const size_t depth) { return columns[depth]; }
+    const std::vector<int> & at(const size_t depth) const { return columns[depth]; }
+
+    std::vector<int> & clone_from_parent(size_t depth) {
+      ensure_child_slot(depth);
+      const auto & parent_col = columns[depth];
+      std::vector<int> & child_col = columns[depth + 1];
+      child_col.assign(parent_col.begin(), parent_col.end());
+      return child_col;
+    }
+  };
+
+  struct AffineWorkspace {
+    std::vector<affine_col_type> columns;
+
+    void initialize(affine_col_type initial, size_t depth_hint = 0) {
+      columns.clear();
+      if(depth_hint > 0) {
+        if(columns.capacity() < depth_hint) columns.reserve(depth_hint);
+      }
+      columns.emplace_back(std::move(initial));
+    }
+
+    void ensure_child_slot(size_t depth) {
+      size_t required_size = depth + 2;
+      if(columns.size() < required_size) {
+        columns.resize(required_size);
+      }
+    }
+
+    affine_col_type & at(const size_t depth) { return columns[depth]; }
+    const affine_col_type & at(const size_t depth) const { return columns[depth]; }
+
+    affine_col_type & clone_from_parent(size_t depth) {
+      ensure_child_slot(depth);
+      affine_col_type & child_col = columns[depth + 1];
+      child_col = columns[depth];
+      return child_col;
+    }
+  };
+
+  struct SingleGapCol {
+    int lower;
+    int diag;
+    int upper;
+  };
+  struct SingleGapWorkspace {
+    std::vector<SingleGapCol> columns;
+
+    void initialize(SingleGapCol initial, size_t depth_hint = 0) {
+      columns.clear();
+      if(depth_hint > 0) {
+        if(columns.capacity() < depth_hint) columns.reserve(depth_hint);
+      }
+      columns.emplace_back(initial);
+    }
+
+    void ensure_child_slot(size_t depth) {
+      size_t required_size = depth + 2;
+      if(columns.size() < required_size) {
+        columns.resize(required_size);
+      }
+    }
+
+    SingleGapCol & at(const size_t depth) { return columns[depth]; }
+    const SingleGapCol & at(const size_t depth) const { return columns[depth]; }
+
+    SingleGapCol & clone_from_parent(size_t depth) {
+      ensure_child_slot(depth);
+      const auto & parent_col = columns[depth];
+      SingleGapCol & child_col = columns[depth + 1];
+      child_col = parent_col;
+      return child_col;
+    }
+  };
+
+  struct BandLimits {
+    size_t lower;
+    size_t upper;
+
+    static inline size_t linear_radius(int max_distance, int gap_cost, size_t query_len) {
+      if(max_distance <= 0) return 0;
+      if(gap_cost <= 0) return query_len;
+      return static_cast<size_t>(max_distance / gap_cost);
+    }
+
+    static inline size_t affine_radius(int max_distance, int gap_cost, int gap_open_cost, size_t query_len) {
+      if(max_distance < gap_open_cost) return 0;
+      const int remaining = max_distance - gap_open_cost;
+      return 1 + static_cast<size_t>(remaining / gap_cost);
+    }
+
+    static inline BandLimits around(size_t char_depth, size_t band_radius, size_t query_len) {
+      size_t lower = (char_depth > band_radius) ? char_depth - band_radius : 0;
+      if(lower > query_len) lower = query_len;
+      const size_t upper = std::min(query_len, char_depth + band_radius);
+      return {lower, upper};
+    }
+  };
+
   const map_type & get_child_nodes() const { return child_nodes; }
   const branch_type & get_branch() const { return branch; }
   const_weak_pointer_type get_parent_node() const { return parent_node; }
   index_type get_terminal_idx() const { return terminal_idx; }
 
-  // output the sequence represented by this node, by traversing up the tree
-  // ST is an array-like container type, e.g. std::vector<char>, std::string
-  template <typename ST> ST sequence() const;
+  template <typename ST>
+  ST sequence() const;
 
   size_type size() const;
-  bool validate(const bool is_root = true) const; // check if tree makes sense
+  bool validate(const bool is_root = true) const;
   std::vector<path> all(size_t max_depth = -1) const;
-  std::string print() const { return print_impl(0); } // this function really only makes sense if atomic_type is char...
+  std::string print() const { return print_impl(0); }
   std::pair<std::vector<path>, std::vector<path>> graph(size_t max_depth = -1) const;
-  index_type find(const span_type query) const; // returns terminal_idx if found, nullidx if not found
-  index_type insert(const span_type sequence, index_type idx); // returns terminal_idx if already exists, otherwise nullidx
-  index_type erase(const span_type sequence); // returns terminal_idx if sequence existed, nullidx if it did not exist
+  path find(const span_type query) const;
+  path insert(const span_type sequence, index_type idx);
+  // Ensure sequence exists and return its terminal path
+  path insert_get_path(const span_type sequence, index_type idx);
+  index_type erase(const span_type sequence);
   std::vector<path> prefix_search(const span_type query) const;
 
-  search_context hamming_search(const span_type query, const int max_distance) const;
-  search_context global_search(const span_type query, const int max_distance) const;
-  search_context anchored_search(const span_type query, const int max_distance) const;
+  search_context hamming_search(const span_type query, int max_distance) const;
+  search_context global_search(const span_type query, int max_distance) const;
+  search_context anchored_search(const span_type query, int max_distance) const;
 
-  // search using a custom edit distance cost matrix
-  // MT is a map type, e.g. std::map<pairchar_type, int>
-  // the map key is the pair of characters (query, target) to compare
-  // All possibile pairs of characters must be included in the map, or else it return an error
-  // The map value is the cost of the edit operation and must be non-negative
-  // The map must also include the special character \0, which represents a gap
-  // Example:
-  // map<pairchar_type, int> m = {{pairchar_type('A','A'), 0}, {pairchar_type('A','B'), 1}, {pairchar_type('A','\0'), 1},
-//                           {pairchar_type('B','A'), 1}, {pairchar_type('B','B'), 0}, {pairchar_type('B','\0'), 1} };
-  template <typename MT> search_context global_search_linear(const span_type query, const int max_distance, const MT & cost_map) const;
-  template <typename MT> search_context anchored_search_linear(const span_type query, const int max_distance, const MT & cost_map) const;
-  
-  template <typename MT> search_context global_search_affine(const span_type query, const int max_distance, const MT & cost_map) const;
-  template <typename MT> search_context anchored_search_affine(const span_type query, const int max_distance, const MT & cost_map) const;
-  
+  search_context global_search_linear(const span_type query, int max_distance, const CostMap & cost_map) const;
+  search_context anchored_search_linear(const span_type query, int max_distance, const CostMap & cost_map) const;
 
+  search_context global_search_affine(const span_type query, int max_distance, const CostMap & cost_map) const;
+  search_context anchored_search_affine(const span_type query, int max_distance, const CostMap & cost_map) const;
+  search_context single_gap_search(const span_type query, int max_distance, const int gap_cost) const;
 
 private:
-  // implementation helpers, subject to change
   std::string print_impl(size_t depth) const;
   enum class erase_action { erase, merge, keep };
   static erase_action erase_impl(weak_pointer_type node, const span_type sequence, index_type & result);
 
-  static void hamming_search_impl(const_weak_pointer_type node, const size_t position, const int distance, search_context & ctx);
+  // Implementation functions
+  template <bool ReturnPathAlways>
+  path insert_impl(const span_type sequence, index_type idx);
 
-  static int update_col(const atomic_type branchval, const span_type query, std::vector<int> & col); // helper for global and anchored search
-  static void global_search_impl(const_weak_pointer_type node, const std::vector<int> & previous_col, search_context & ctx);
-  static void anchored_search_impl(const_weak_pointer_type node, const std::vector<int> & previous_col, const int row_min, search_context & ctx);
+  static void hamming_search_impl(const_weak_pointer_type node, size_t position, int distance, search_context & ctx);
+  static int update_col_banded(atomic_type branchval, const span_type query, std::vector<int> & col, size_t lower, size_t upper);
+  static void global_search_impl(const_weak_pointer_type node, size_t node_depth, size_t char_depth, search_context & ctx, UnitWorkspace & workspace); // unitary cost
+  static void anchored_search_impl(const_weak_pointer_type node, size_t node_depth, size_t char_depth, int row_min, search_context & ctx, UnitWorkspace & workspace); // unitary cost
 
-  template <typename MT> static int update_col_linear(const atomic_type branchval, const span_type query, std::vector<int> & col, const MT & cost_map);
-  template <typename MT> static void global_search_linear_impl(const_weak_pointer_type node, const std::vector<int> & previous_col, search_context & ctx, const MT & cost_map);
-  template <typename MT> static void anchored_search_linear_impl(const_weak_pointer_type node, const std::vector<int> & previous_col, const int row_min, search_context & ctx, const MT & cost_map);
+  static int update_col_linear_banded(atomic_type branchval, const span_type query, std::vector<int> & col, size_t lower, size_t upper, const CostMap & cost_map);
+  static void global_search_linear_impl(const_weak_pointer_type node, size_t node_depth, size_t char_depth, search_context & ctx, UnitWorkspace & workspace, const CostMap & cost_map);
+  static void anchored_search_linear_impl(const_weak_pointer_type node, size_t node_depth, size_t char_depth, int row_min, search_context & ctx, UnitWorkspace & workspace, const CostMap & cost_map);
 
-  template <typename MT> static int update_col_affine(const atomic_type branchval, const span_type query, affine_col_type & col, const MT & cost_map);
-  template <typename MT> static void global_search_affine_impl(const_weak_pointer_type node, const affine_col_type & previous_col, search_context & ctx, const MT & cost_map);
-  template <typename MT> static void anchored_search_affine_impl(const_weak_pointer_type node, const affine_col_type & previous_col, const int row_min, search_context & ctx, const MT & cost_map);
+  static int update_col_affine_banded(atomic_type branchval, const span_type query, affine_col_type & col, size_t lower, size_t upper, const CostMap & cost_map);
+  static void global_search_affine_impl(const_weak_pointer_type node, size_t node_depth, size_t char_depth, search_context & ctx, AffineWorkspace & workspace, const CostMap & cost_map);
+  static void anchored_search_affine_impl(const_weak_pointer_type node, size_t node_depth, size_t char_depth, int row_min, search_context & ctx, AffineWorkspace & workspace, const CostMap & cost_map);
+
+  static int update_col_single_gap(atomic_type branchval, const span_type query, size_t ref_len, SingleGapCol & col, const int gap_cost);
+  static void single_gap_search_impl(const_weak_pointer_type node, size_t node_depth, size_t char_depth, int row_min, search_context & ctx, SingleGapWorkspace & workspace, const int gap_cost);
 };
 
-TEMPLATE_LIST template <typename ST>
-ST RADIXMAP_T::sequence() const {
+// implementations
+template <typename ST>
+inline ST RadixMap::sequence() const {
   static_assert(std::is_same<typename ST::value_type, atomic_type>::value, "Output sequence value_type must be the same as RadixMap::atomic_type.");
   const_weak_pointer_type current = this;
   std::vector<const_weak_pointer_type> h;
@@ -140,26 +270,27 @@ ST RADIXMAP_T::sequence() const {
   return result;
 }
 
-TEMPLATE_LIST std::vector<typename RADIXMAP_T::path> RADIXMAP_T::all(size_t max_depth) const {
+inline std::vector<RadixMap::path> RadixMap::all(size_t max_depth) const {
   std::vector<path> result;
   if(terminal_idx != nullidx) {
     result.push_back(this);
   }
   if(max_depth == 0) return result;
   for(auto & ch : child_nodes) {
-    std::vector<path> x = ch.second->all(--max_depth);
+    size_t next_depth = (max_depth == std::numeric_limits<size_t>::max()) ? max_depth : (max_depth - 1);
+    std::vector<path> x = ch.second->all(next_depth);
     appendspan(result, x);
   }
   return result;
 }
 
-TEMPLATE_LIST typename RADIXMAP_T::size_type RADIXMAP_T::size() const {
+inline RadixMap::size_type RadixMap::size() const {
   size_type result = terminal_idx == nullidx ? 0 : 1;
   for(auto & ch : child_nodes) { result += ch.second->size(); }
   return result;
 }
 
-TEMPLATE_LIST bool RADIXMAP_T::validate(const bool is_root) const {
+inline bool RadixMap::validate(const bool is_root) const {
   // checks:
   // 1) all parent_node values are correct
   // root can be distinguished by parent_node == nullptr
@@ -176,13 +307,12 @@ TEMPLATE_LIST bool RADIXMAP_T::validate(const bool is_root) const {
   for(auto & ch : child_nodes) {
     if(ch.first != ch.second->branch[0]) return false;
     if(ch.second->parent_node != this) return false;
-    return ch.second->validate(false);
+    if(!ch.second->validate(false)) return false;
   }
   return true;
 }
 
-
-TEMPLATE_LIST std::string RADIXMAP_T::print_impl(size_t depth) const {
+inline std::string RadixMap::print_impl(size_t depth) const {
   std::string result;
   if(depth == 0) {
     result += "(root)";
@@ -216,7 +346,7 @@ TEMPLATE_LIST std::string RADIXMAP_T::print_impl(size_t depth) const {
   return result;
 }
 
-TEMPLATE_LIST std::pair<std::vector<typename RADIXMAP_T::path>, std::vector<typename RADIXMAP_T::path>> RADIXMAP_T::graph(size_t max_depth) const {
+inline std::pair<std::vector<RadixMap::path>, std::vector<RadixMap::path>> RadixMap::graph(size_t max_depth) const {
   std::pair<std::vector<path>, std::vector<path>> result;
   if(parent_node != nullptr) {
     result.first.push_back(path(parent_node));
@@ -224,63 +354,81 @@ TEMPLATE_LIST std::pair<std::vector<typename RADIXMAP_T::path>, std::vector<type
   }
   if(max_depth == 0) return result;
   for(auto & ch : child_nodes) {
-    auto x = ch.second->graph(--max_depth);
+    size_t next_depth = (max_depth == std::numeric_limits<size_t>::max()) ? max_depth : (max_depth - 1);
+    auto x = ch.second->graph(next_depth);
     appendspan(result.first, x.first);
     appendspan(result.second, x.second);
   }
   return result;
 }
 
-TEMPLATE_LIST typename RADIXMAP_T::index_type RADIXMAP_T::find(const typename RADIXMAP_T::span_type query) const {
+inline RadixMap::path RadixMap::find(const RadixMap::span_type query) const {
   const_weak_pointer_type node = this;
   size_t position=0;
   while(position < query.size()) {
     if(node->child_nodes.find(query[position]) != node->child_nodes.end()) {
       node = node->child_nodes.at(query[position]).get();
-      if(position + node->branch.size() > query.size()) return nullidx;
+      if(position + node->branch.size() > query.size()) return path();
       for(size_t j=0; j<node->branch.size(); ++j) {
-        if(node->branch[j] != query[position+j]) return nullidx;
+        if(node->branch[j] != query[position+j]) return path();
       }
       position += node->branch.size();
     } else {
-      return nullidx;
+      return path();
     }
   }
-  return node->terminal_idx;
+  return path(node);
 }
 
-TEMPLATE_LIST typename RADIXMAP_T::index_type RADIXMAP_T::insert(const typename RADIXMAP_T::span_type sequence, index_type idx) {
+inline RadixMap::path RadixMap::insert(const RadixMap::span_type sequence, index_type idx) {
+  return insert_impl<false>(sequence, idx);
+}
+
+inline RadixMap::path RadixMap::insert_get_path(const RadixMap::span_type sequence, index_type idx) {
+  return insert_impl<true>(sequence, idx);
+}
+
+template <bool ReturnPathAlways>
+inline RadixMap::path RadixMap::insert_impl(const RadixMap::span_type sequence, index_type idx) {
   if(sequence.size() == 0) {
-    // std::cout << "case -1: end of sequence" << std::endl;
     if(terminal_idx == nullidx) {
       terminal_idx = idx;
-      return nullidx;
+      if constexpr (ReturnPathAlways) {
+        return path(this);
+      } else {
+        return path();
+      }
     } else {
-      return terminal_idx;
+      return path(this);
     }
   }
   atomic_type s = sequence[0];
   if(child_nodes.find(s) == child_nodes.end()) {
-    // std::cout << "case 0: no existing branch" << std::endl;
     child_nodes.emplace(s, pointer_type(new self_type));
     child_nodes[s]->parent_node = this;
     child_nodes[s]->branch = subvector<branch_type>(sequence, 0);
     child_nodes[s]->terminal_idx = idx;
-    return nullidx;
+    if constexpr (ReturnPathAlways) {
+      return path(child_nodes[s].get());
+    } else {
+      return path();
+    }
   }
   size_t i = 0;
   while(i < child_nodes[s]->branch.size() && i < sequence.size() && sequence[i] == child_nodes[s]->branch[i]) { ++i; }
   
   if(i == sequence.size() && i == child_nodes[s]->branch.size()) {
-    // std::cout << "case 1: sequence is same as branch" << std::endl;
     if(child_nodes[s]->terminal_idx == nullidx) {
       child_nodes[s]->terminal_idx = idx;
-      return nullidx;
+      if constexpr (ReturnPathAlways) {
+        return path(child_nodes[s].get());
+      } else {
+        return path();
+      }
     } else {
-      return child_nodes[s]->terminal_idx;
+      return path(child_nodes[s].get());
     }
   } else if(i == sequence.size()) {
-    // std::cout << "case 2: sequence is shorter than branch" << std::endl;
     branch_type branch_prefix = subvector<branch_type>(child_nodes[s]->branch,0,i);
     branch_type branch_suffix = subvector<branch_type>(child_nodes[s]->branch,i);
     atomic_type s_insert = branch_suffix[0];
@@ -292,13 +440,15 @@ TEMPLATE_LIST typename RADIXMAP_T::index_type RADIXMAP_T::insert(const typename 
     inserted_node->terminal_idx = idx;
     inserted_node->child_nodes[s_insert]->branch = std::move(branch_suffix);
     child_nodes[s] = std::move(inserted_node);
-    return nullidx;
+    if constexpr (ReturnPathAlways) {
+      return path(child_nodes[s].get());
+    } else {
+      return path();
+    }
   } else if(i == child_nodes[s]->branch.size()) {
-    // std::cout << "case 3: sequence is longer than branch" << std::endl;
-    span_type seq_suffix = sequence.subspan(i); // will remain as span
-    return child_nodes[s]->insert(seq_suffix, idx);
+    span_type seq_suffix = sequence.subspan(i);
+    return child_nodes[s]->insert_impl<ReturnPathAlways>(seq_suffix, idx);
   } else {
-    // std::cout << "case 4: sequence is different than branch" << std::endl;
     branch_type branch_prefix = subvector<branch_type>(child_nodes[s]->branch,0,i);
     branch_type branch_suffix = subvector<branch_type>(child_nodes[s]->branch,i);
     branch_type seq_suffix = subvector<branch_type>(sequence,i);
@@ -316,18 +466,22 @@ TEMPLATE_LIST typename RADIXMAP_T::index_type RADIXMAP_T::insert(const typename 
     inserted_node->child_nodes[s_insert_seq]->terminal_idx = idx;
     child_nodes[s] = std::move(inserted_node);
     child_nodes[s]->branch = std::move(branch_prefix);
-    return nullidx;
+    if constexpr (ReturnPathAlways) {
+      return path(child_nodes[s]->child_nodes[s_insert_seq].get());
+    } else {
+      return path();
+    }
   }
 }
 
 
-TEMPLATE_LIST typename RADIXMAP_T::index_type RADIXMAP_T::erase(const typename RADIXMAP_T::span_type sequence) {
+inline RadixMap::index_type RadixMap::erase(const RadixMap::span_type sequence) {
   index_type result = nullidx;
   erase_impl(this, sequence, result);
   return result;
 }
 
-TEMPLATE_LIST std::vector<typename RADIXMAP_T::path> RADIXMAP_T::prefix_search(const typename RADIXMAP_T::span_type query) const {
+inline std::vector<RadixMap::path> RadixMap::prefix_search(const RadixMap::span_type query) const {
   const_weak_pointer_type node = this;
   size_t query_position = 0;
   size_t branch_position = 0;
@@ -350,51 +504,57 @@ TEMPLATE_LIST std::vector<typename RADIXMAP_T::path> RADIXMAP_T::prefix_search(c
   return node->all();
 }
 
-TEMPLATE_LIST typename RADIXMAP_T::search_context RADIXMAP_T::hamming_search(const span_type query, const int max_distance) const {
+inline RadixMap::search_context RadixMap::hamming_search(const span_type query, const int max_distance) const {
   search_context ctx(query, max_distance);
   hamming_search_impl(this, 0, 0, ctx);
   return ctx;
 }
 
-TEMPLATE_LIST typename RADIXMAP_T::search_context RADIXMAP_T::global_search(const typename RADIXMAP_T::span_type query, const int max_distance) const {
+inline RadixMap::search_context RadixMap::global_search(const RadixMap::span_type query, const int max_distance) const {
   search_context ctx(query, max_distance);
-  global_search_impl(this, iota_range<std::vector<int>>(0, query.size() + 1), ctx); 
+  UnitWorkspace workspace;
+  workspace.initialize(iota_range<std::vector<int>>(0, query.size() + 1), query.size() + 1);
+  global_search_impl(this, 0, 0, ctx, workspace); 
   return ctx;
 }
 
 // an "anchored" search can end on the last column or col of the dynamic programming array
 // unlike global which must end on the bottom right corner
 // we need to keep track of the minimum value in the last row
-TEMPLATE_LIST typename RADIXMAP_T::search_context RADIXMAP_T::anchored_search(const typename RADIXMAP_T::span_type query, const int max_distance) const {
+inline RadixMap::search_context RadixMap::anchored_search(const RadixMap::span_type query, const int max_distance) const {
   search_context ctx(query, max_distance);
-  anchored_search_impl(this, iota_range<std::vector<int>>(0, query.size() + 1), query.size(), ctx); 
+  UnitWorkspace workspace;
+  workspace.initialize(iota_range<std::vector<int>>(0, query.size() + 1), query.size() + 1);
+  anchored_search_impl(this, 0, 0, query.size(), ctx, workspace); 
   return ctx;
 }
 
-TEMPLATE_LIST template <typename MT>
-typename RADIXMAP_T::search_context RADIXMAP_T::global_search_linear(const typename RADIXMAP_T::span_type query, const int max_distance, const MT & cost_map) const {
-  search_context ctx(query, max_distance);
-  std::vector<int> col(query.size() + 1, 0);
-  for(size_t i=1; i<col.size(); ++i) {
-    col[i] = col[i-1] + cost_map.at(pairchar_type(query[i-1], GAP_CHAR)); // gap in target
-  }
-  global_search_linear_impl<MT>(this, col, ctx, cost_map);
-  return ctx;
-}
-
-TEMPLATE_LIST template <typename MT>
-typename RADIXMAP_T::search_context RADIXMAP_T::anchored_search_linear(const typename RADIXMAP_T::span_type query, const int max_distance, const MT & cost_map) const {
+inline RadixMap::search_context RadixMap::global_search_linear(const RadixMap::span_type query, const int max_distance, const CostMap & cost_map) const {
   search_context ctx(query, max_distance);
   std::vector<int> col(query.size() + 1, 0);
   for(size_t i=1; i<col.size(); ++i) {
-    col[i] = col[i-1] + cost_map.at(pairchar_type(query[i-1], GAP_CHAR)); // gap in target
+    col[i] = col[i-1] + cost_map.gap_cost; // gap in target
   }
-  anchored_search_linear_impl<MT>(this, col, col.back(), ctx, cost_map);
+  UnitWorkspace workspace;
+  workspace.initialize(std::move(col), query.size() + 1);
+  global_search_linear_impl(this, 0, 0, ctx, workspace, cost_map);
   return ctx;
 }
 
-TEMPLATE_LIST template <typename MT>
-typename RADIXMAP_T::search_context RADIXMAP_T::global_search_affine(const typename RADIXMAP_T::span_type query, const int max_distance, const MT & cost_map) const {
+inline RadixMap::search_context RadixMap::anchored_search_linear(const RadixMap::span_type query, const int max_distance, const CostMap & cost_map) const {
+  search_context ctx(query, max_distance);
+  std::vector<int> col(query.size() + 1, 0);
+  for(size_t i=1; i<col.size(); ++i) {
+    col[i] = col[i-1] + cost_map.gap_cost; // gap in target
+  }
+  int row_min = col.back();
+  UnitWorkspace workspace;
+  workspace.initialize(std::move(col), query.size() + 1);
+  anchored_search_linear_impl(this, 0, 0, row_min, ctx, workspace, cost_map);
+  return ctx;
+}
+
+inline RadixMap::search_context RadixMap::global_search_affine(const RadixMap::span_type query, const int max_distance, const CostMap & cost_map) const {
   search_context ctx(query, max_distance);
   size_t col_size = query.size() + 1;
   affine_col_type col = std::make_tuple(std::vector<int>(col_size, 0), std::vector<int>(col_size, 0), std::vector<int>(col_size, 0));
@@ -407,22 +567,22 @@ typename RADIXMAP_T::search_context RADIXMAP_T::global_search_affine(const typen
   for(size_t i=1; i<col_size; ++i) {
     M_col[i] = NO_ALIGN;
     X_col[i] = NO_ALIGN;
-    if(i == 1) {
-      Y_col[i] = cost_map.at(pairchar_type(query[i-1], GAP_OPEN_CHAR));
-    } else {
-      Y_col[i] = Y_col[i-1] + cost_map.at(pairchar_type(query[i-1], GAP_EXTN_CHAR));
-    }
+    if(i == 1) Y_col[i] = cost_map.gap_open_cost;
+    else       Y_col[i] = Y_col[i-1] + cost_map.gap_cost;
   }
   // print_vec(M_col);
   // print_vec(X_col);
   // print_vec(Y_col);
   // std::cout << std::endl;
-  global_search_affine_impl<MT>(this, col, ctx, cost_map);
+  AffineWorkspace workspace;
+  workspace.initialize(std::move(col), query.size() + 1);
+  global_search_affine_impl(this, 0, 0, ctx, workspace, cost_map);
   return ctx;
 }
 
-TEMPLATE_LIST template <typename MT>
-typename RADIXMAP_T::search_context RADIXMAP_T::anchored_search_affine(const typename RADIXMAP_T::span_type query, const int max_distance, const MT & cost_map) const {
+ 
+
+inline RadixMap::search_context RadixMap::anchored_search_affine(const RadixMap::span_type query, const int max_distance, const CostMap & cost_map) const {
   search_context ctx(query, max_distance);
   size_t col_size = query.size() + 1;
   affine_col_type col = std::make_tuple(std::vector<int>(col_size, 0), std::vector<int>(col_size, 0), std::vector<int>(col_size, 0));
@@ -435,19 +595,136 @@ typename RADIXMAP_T::search_context RADIXMAP_T::anchored_search_affine(const typ
   for(size_t i=1; i<col_size; ++i) {
     M_col[i] = NO_ALIGN;
     X_col[i] = NO_ALIGN;
-    if(i == 1) {
-      Y_col[i] = cost_map.at(pairchar_type(query[i-1], GAP_OPEN_CHAR));
-    } else {
-      Y_col[i] = Y_col[i-1] + cost_map.at(pairchar_type(query[i-1], GAP_EXTN_CHAR));
-    }
+    if(i == 1) Y_col[i] = cost_map.gap_open_cost;
+    else       Y_col[i] = Y_col[i-1] + cost_map.gap_cost;
   }
-  anchored_search_affine_impl<MT>(this, col, 
-                                 std::min({M_col.back(), Y_col.back()}), // Edge case: use M_col if query is empty
-                                 ctx, cost_map);
+  int row_min = std::min({M_col.back(), Y_col.back()});
+  AffineWorkspace workspace;
+  workspace.initialize(std::move(col), query.size() + 1);
+  anchored_search_affine_impl(this, 0, 0, row_min, ctx, workspace, cost_map);
   return ctx;
 }
 
-TEMPLATE_LIST typename RADIXMAP_T::erase_action RADIXMAP_T::erase_impl(typename RADIXMAP_T::weak_pointer_type node, const span_type sequence, typename RADIXMAP_T::index_type & result) {
+inline RadixMap::search_context RadixMap::single_gap_search(const RadixMap::span_type query,
+                                                            const int max_distance,
+                                                            const int gap_cost) const {
+  search_context ctx(query, max_distance);
+  SingleGapWorkspace workspace;
+  SingleGapCol initial{NO_ALIGN, 0, (query.size() > 0 ? gap_cost : 0)}; // if query is empty, lower stores the row min which is 0
+  workspace.initialize(initial, query.size() + 1);
+  int row_min = query.size() == 0 ? 0 :
+                query.size() == 1 ? gap_cost :
+                NO_ALIGN;
+  single_gap_search_impl(this, 0, 0, row_min, ctx, workspace, gap_cost);
+  return ctx;
+}
+
+inline int RadixMap::update_col_single_gap(const RadixMap::atomic_type branchval,
+                                           const RadixMap::span_type query,
+                                           const size_t char_depth,
+                                           RadixMap::SingleGapCol & col,
+                                           const int gap_cost) {
+  const RadixMap::SingleGapCol prev = col;
+  auto match_score = [branchval, &query](size_t pos) -> int {
+    return branchval == query[pos] ? 0 : 1;
+  };
+  if(char_depth <= 1) {
+    col.lower = gap_cost;
+  } else if(char_depth <= query.size() + 1) {
+    col.lower = std::min(prev.lower + match_score(char_depth - 2), prev.diag + gap_cost);
+  } else {
+    col.lower = NO_ALIGN;
+  }
+  // if diag exceeds query size, it is NO_ALIGN
+  if(char_depth <= query.size()) {
+    col.diag = prev.diag + match_score(char_depth - 1);
+  } else {
+    col.diag = NO_ALIGN;
+  }
+  // if upper exceeds query size, it is NO_ALIGN
+  if(char_depth < query.size()) {
+    col.upper = std::min(prev.upper + match_score(char_depth), col.diag + gap_cost); // depends on current col.diag, must come after col.diag update
+  } else {
+    col.upper = NO_ALIGN;
+  }
+  return std::min({col.diag, col.upper, col.lower});
+}
+
+inline void RadixMap::single_gap_search_impl(RadixMap::const_weak_pointer_type node,
+                                             const size_t node_depth,
+                                             const size_t char_depth,
+                                             int row_min,
+                                             RadixMap::search_context & ctx,
+                                             SingleGapWorkspace & workspace,
+                                             const int gap_cost) {
+  workspace.ensure_child_slot(node_depth);
+  const size_t query_len = ctx.query.size();
+
+  SingleGapCol & current_col = workspace.at(node_depth);
+  int current_col_min = std::min({current_col.diag, current_col.upper, current_col.lower});
+  auto get_row_min = [query_len](const SingleGapCol & col, size_t char_depth, int row_min) -> int {
+    if(char_depth == query_len - 1) {
+      return col.upper;
+    } else if(char_depth == query_len) {
+      return std::min({row_min, col.diag});
+    } else if(char_depth == query_len + 1) {
+      return std::min({row_min, col.lower});
+    } else {
+      return NO_ALIGN;
+    }
+  };
+  int current_row_min = get_row_min(current_col, char_depth, row_min);
+  if( (current_col_min > ctx.max_distance) && (current_row_min > ctx.max_distance) ) { // case 1
+    return;
+  } else if( (current_row_min <= ctx.max_distance) && (current_row_min <= current_col_min) ) { // case 2
+    std::vector<path> child_sequences = node->all();
+    for(auto & chs : child_sequences) {
+      if(chs->terminal_idx != nullidx) {
+        ctx.match.push_back(chs);
+        ctx.distance.push_back(current_row_min);
+      }
+    }
+    return;
+  } else if(node->terminal_idx != nullidx) { // case 3
+    if(current_col_min <= ctx.max_distance) {
+      ctx.match.push_back(path(node));
+      ctx.distance.push_back(current_col_min);
+    }
+  }
+  const int parent_min = current_col_min;
+  for (auto & ch : node->child_nodes) {
+    SingleGapCol & child_col = workspace.clone_from_parent(node_depth);
+    current_col_min = parent_min;
+    const branch_type & branch = ch.second->branch;
+    bool max_distance_exceeded = false;
+    int child_row_min = row_min;
+    size_t child_char_depth = char_depth;
+    for(atomic_type branchval : branch) {
+      ++child_char_depth;
+      current_col_min = update_col_single_gap(branchval, ctx.query, child_char_depth, child_col, gap_cost);
+      child_row_min = get_row_min(child_col, child_char_depth, child_row_min);
+      if( (current_col_min > ctx.max_distance) && (child_row_min > ctx.max_distance) ) { // case 1
+        max_distance_exceeded = true;
+        break;
+      } else if( (child_row_min <= ctx.max_distance) && (child_row_min <= current_col_min) ) { // case 2
+        max_distance_exceeded = true;
+        std::vector<path> grandchild_sequences = ch.second->all();
+        for(auto & gchs : grandchild_sequences) {
+          if(gchs->terminal_idx != nullidx) {
+            ctx.match.push_back(gchs);
+            ctx.distance.push_back(child_row_min);
+          }
+        }
+        break;
+      }
+    }
+    if(!max_distance_exceeded) {
+      single_gap_search_impl(ch.second.get(), node_depth + 1, child_char_depth, child_row_min, ctx, workspace, gap_cost);
+    }
+  }
+}
+
+inline RadixMap::erase_action RadixMap::erase_impl(RadixMap::weak_pointer_type node, const span_type sequence, RadixMap::index_type & result) {
   if(sequence.size() == 0) {
     std::swap(result, node->terminal_idx); // if sequence doesn't exist, terminal_idx should be nullidx which is fine since result is initialized as nullidx
     size_t nc = node->child_nodes.size();
@@ -502,7 +779,7 @@ TEMPLATE_LIST typename RADIXMAP_T::erase_action RADIXMAP_T::erase_impl(typename 
   }
 }
 
-TEMPLATE_LIST void RADIXMAP_T::hamming_search_impl(typename RADIXMAP_T::const_weak_pointer_type node, const size_t position, const int distance, typename RADIXMAP_T::search_context & ctx) {
+inline void RadixMap::hamming_search_impl(RadixMap::const_weak_pointer_type node, const size_t position, const int distance, RadixMap::search_context & ctx) {
   if(position == ctx.query.size()) {
     if(node->terminal_idx != nullidx) {
       ctx.match.push_back(path(node));
@@ -530,39 +807,89 @@ TEMPLATE_LIST void RADIXMAP_T::hamming_search_impl(typename RADIXMAP_T::const_we
   }
 }
 
-TEMPLATE_LIST int RADIXMAP_T::update_col(const typename RADIXMAP_T::atomic_type branchval, const typename RADIXMAP_T::span_type query, std::vector<int> & col) {
-  int previous_col_i_minus_1 = col[0];
-  col[0] = col[0] + 1;
-  int min_element = col[0];
-  for(size_t i=1; i<col.size(); ++i) {
-    int match_cost  = previous_col_i_minus_1 + (query[i-1] == branchval ? 0 : 1);
-    int insert_cost = col[i-1] + 1;
-    int delete_cost = col[i] + 1;
-    previous_col_i_minus_1 = col[i];
-    col[i] = std::min({match_cost, insert_cost, delete_cost});
-    if(col[i] < min_element) min_element = col[i];
+inline int RadixMap::update_col_banded(const RadixMap::atomic_type branchval, const RadixMap::span_type query,
+                                       std::vector<int> & col, size_t lower, size_t upper) {
+  size_t query_len = query.size();
+  if(upper > query_len) upper = query_len;
+  if(lower > upper) {
+    std::fill(col.begin(), col.end(), NO_ALIGN);
+    return NO_ALIGN;
   }
+
+  int min_element = NO_ALIGN;
+  int previous_diag;
+  size_t start = lower;
+  if(lower == 0) {
+    previous_diag = col[0];
+    col[0] = col[0] + 1;
+    min_element = col[0];
+    start = 1;
+  } else {
+    previous_diag = col[lower - 1];
+  }
+
+  for(size_t i = start; i <= upper; ++i) {
+    int original = col[i];
+    int left = (i == lower) ? NO_ALIGN : col[i-1];
+    int match_cost = previous_diag + (query[i-1] == branchval ? 0 : 1);
+    int insert_cost = left + 1;
+    int delete_cost = original + 1;
+    int new_val = std::min({match_cost, insert_cost, delete_cost});
+    col[i] = new_val;
+    previous_diag = original;
+    if(new_val < min_element) min_element = new_val;
+  }
+
+  if(lower > 0) {
+    col[lower - 1] = NO_ALIGN;
+  }
+  for(size_t i = upper + 1; i < col.size(); ++i) col[i] = NO_ALIGN;
+
   return min_element;
 }
 
-TEMPLATE_LIST void RADIXMAP_T::global_search_impl(typename RADIXMAP_T::const_weak_pointer_type node, const std::vector<int> & previous_col, search_context & ctx) {
-  if( *std::min_element(previous_col.begin(), previous_col.end()) > ctx.max_distance ) { return; }
-  if((node->terminal_idx != nullidx) && (previous_col.back() <= ctx.max_distance)) {
-    ctx.match.push_back(path(node));
-    ctx.distance.push_back(previous_col.back());
+inline void RadixMap::global_search_impl(RadixMap::const_weak_pointer_type node,
+                                         const size_t node_depth,
+                                         const size_t char_depth,
+                                         RadixMap::search_context & ctx,
+                                         UnitWorkspace & workspace) {
+  workspace.ensure_child_slot(node_depth);
+  const size_t query_len = ctx.query.size();
+  const size_t band_radius = static_cast<size_t>(ctx.max_distance);
+  const BandLimits band = BandLimits::around(char_depth, band_radius, query_len);
+
+  std::vector<int> & current_col = workspace.at(node_depth);
+  int current_col_min = NO_ALIGN;
+  if(band.lower <= band.upper) {
+    for(size_t i = band.lower; i <= band.upper; ++i) {
+      current_col_min = std::min(current_col_min, current_col[i]);
+    }
   }
+  if(current_col_min > ctx.max_distance) { return; }
+
+  const int terminal_distance = (band.upper == query_len) ? current_col.back() : NO_ALIGN;
+  if((node->terminal_idx != nullidx) && (terminal_distance <= ctx.max_distance)) {
+    ctx.match.push_back(path(node));
+    ctx.distance.push_back(terminal_distance);
+  }
+
   for (auto & ch : node->child_nodes) {
-    std::vector<int> current_col = previous_col;
-    branch_type & branch = ch.second->branch;
-    bool max_distance_exceeded = false;
-    for(size_t u=0; u<branch.size(); ++u) {
-      int current_dist = update_col(branch[u], ctx.query, current_col);
+    std::vector<int> & child_col = workspace.clone_from_parent(node_depth);
+    bool prune_child = false;
+    size_t child_char_depth = char_depth;
+    const branch_type & branch = ch.second->branch;
+    for(atomic_type branchval : branch) {
+      ++child_char_depth;
+      const BandLimits child_band = BandLimits::around(child_char_depth, band_radius, query_len);
+      const int current_dist = update_col_banded(branchval, ctx.query, child_col, child_band.lower, child_band.upper);
       if(current_dist > ctx.max_distance) {
-        max_distance_exceeded = true;
+        prune_child = true;
         break;
       }
     }
-    if(!max_distance_exceeded) global_search_impl(ch.second.get(), current_col, ctx);
+    if(!prune_child) {
+      global_search_impl(ch.second.get(), node_depth + 1, child_char_depth, ctx, workspace);
+    }
   }
 }
 
@@ -573,292 +900,472 @@ TEMPLATE_LIST void RADIXMAP_T::global_search_impl(typename RADIXMAP_T::const_wea
 // col > max > row -- add all children (distance = row) and stop (case 2)
 // row > col > max -- stop (case 1)
 // col > row > max -- stop (case 1)
-TEMPLATE_LIST void RADIXMAP_T::anchored_search_impl(typename RADIXMAP_T::const_weak_pointer_type node, const std::vector<int> & previous_col, const int row_min, search_context & ctx) {
-  int current_col_min = *std::min_element(previous_col.begin(), previous_col.end());
+inline void RadixMap::anchored_search_impl(RadixMap::const_weak_pointer_type node,
+                                           const size_t node_depth,
+                                           const size_t char_depth,
+                                           const int row_min,
+                                           RadixMap::search_context & ctx,
+                                           UnitWorkspace & workspace) {
+  workspace.ensure_child_slot(node_depth);
+  const size_t query_len = ctx.query.size();
+  const size_t band_radius = static_cast<size_t>(ctx.max_distance);
+  const BandLimits band = BandLimits::around(char_depth, band_radius, query_len);
+
+  std::vector<int> & current_col = workspace.at(node_depth);
+  int current_col_min = NO_ALIGN;
+  if(band.lower <= band.upper) {
+    for(size_t i = band.lower; i <= band.upper; ++i) {
+      current_col_min = std::min(current_col_min, current_col[i]);
+    }
+  }
+
   int current_row_min = row_min;
   if( (current_col_min > ctx.max_distance) && (current_row_min > ctx.max_distance) ) { // case 1
     return;
   } else if( (current_row_min <= ctx.max_distance) && (current_row_min <= current_col_min) ) { // case 2
-    // if row_min <= col_min then the search ends on the column
-    // we can stop, since it's impossible to find a smaller value by continuing the search
     std::vector<path> child_sequences = node->all();
-    for(auto & chs : child_sequences) { // also includes current node
+    for(auto & chs : child_sequences) {
       if(chs->terminal_idx != nullidx) {
         ctx.match.push_back(chs);
         ctx.distance.push_back(current_row_min);
       }
     }
     return;
-  } else if(node->terminal_idx != nullidx) { // this is a terminal leaf and its best value is on the col // case 3
+  } else if(node->terminal_idx != nullidx) { // case 3
     if(current_col_min <= ctx.max_distance) {
       ctx.match.push_back(path(node));
       ctx.distance.push_back(current_col_min);
     }
   }
+  const int parent_min = current_col_min;
   for (auto & ch : node->child_nodes) {
-    std::vector<int> current_col = previous_col;
-    branch_type & branch = ch.second->branch;
+    std::vector<int> & child_col = workspace.clone_from_parent(node_depth);
+    current_col_min = parent_min;
+    const branch_type & branch = ch.second->branch;
     bool max_distance_exceeded = false;
-    current_row_min = row_min;
-    for(size_t u=0; u<branch.size(); ++u) {
-      current_col_min = update_col(branch[u], ctx.query, current_col);
-      current_row_min = std::min(current_row_min, current_col.back());
-      if( (current_col_min > ctx.max_distance) && (current_row_min > ctx.max_distance) ) { // case 1
+    int child_row_min = row_min;
+    size_t child_char_depth = char_depth;
+    for(atomic_type branchval : branch) {
+      ++child_char_depth;
+      const BandLimits child_band = BandLimits::around(child_char_depth, band_radius, query_len);
+      current_col_min = update_col_banded(branchval, ctx.query, child_col, child_band.lower, child_band.upper);
+      const int terminal_candidate = (child_band.upper == query_len) ? child_col.back() : NO_ALIGN;
+      child_row_min = std::min(child_row_min, terminal_candidate);
+      if( (current_col_min > ctx.max_distance) && (child_row_min > ctx.max_distance) ) { // case 1
         max_distance_exceeded = true;
         break;
-      } else if( (current_row_min <= ctx.max_distance) && (current_row_min <= current_col_min) ) { // case 2
-        // if row_min <= col_min then the search ends on the column
-        // we can stop, since it's impossible to find a smaller value by continuing the search
-        max_distance_exceeded = true; // "exceeded" in the sense that we include all children below and don't need to keep searching
+      } else if( (child_row_min <= ctx.max_distance) && (child_row_min <= current_col_min) ) { // case 2
+        max_distance_exceeded = true;
         std::vector<path> grandchild_sequences = ch.second->all();
-        for(auto & gchs : grandchild_sequences) { // also includes ch node
+        for(auto & gchs : grandchild_sequences) {
           if(gchs->terminal_idx != nullidx) {
             ctx.match.push_back(gchs);
-            ctx.distance.push_back(current_row_min);
+            ctx.distance.push_back(child_row_min);
           }
         }
         break;
       }
-      // case 3 does not need to be considered since we are never on top of a terminal leaf within this loop
     }
-    if(!max_distance_exceeded) anchored_search_impl(ch.second.get(), current_col, current_row_min, ctx);
+    if(!max_distance_exceeded) anchored_search_impl(ch.second.get(), node_depth + 1, child_char_depth, child_row_min, ctx, workspace);
   }
 }
 
-TEMPLATE_LIST template <typename MT>
-int RADIXMAP_T::update_col_linear(const typename RADIXMAP_T::atomic_type branchval, const typename RADIXMAP_T::span_type query, std::vector<int> & col, const MT & cost_map) {
-  int previous_col_i_minus_1 = col[0];
-  col[0] = col[0] + cost_map.at(pairchar_type(GAP_CHAR, branchval)); // gap in target
-  int min_element = col[0];
-  for(size_t i=1; i<col.size(); ++i) {
-    int match_cost  = previous_col_i_minus_1 + cost_map.at(pairchar_type(query[i-1], branchval));
-    int gap_in_query = col[i] + cost_map.at(pairchar_type(GAP_CHAR, branchval));
-    int gap_in_target = col[i-1] + cost_map.at(pairchar_type(query[i-1], GAP_CHAR));
-    previous_col_i_minus_1 = col[i];
-    col[i] = std::min({match_cost, gap_in_query, gap_in_target});
-    if(col[i] < min_element) min_element = col[i];
+inline int RadixMap::update_col_linear_banded(const RadixMap::atomic_type branchval, const RadixMap::span_type query,
+                                              std::vector<int> & col, size_t lower, size_t upper,
+                                              const CostMap & cost_map) {
+  size_t query_len = query.size();
+  if(upper > query_len) upper = query_len;
+  if(lower > upper) {
+    std::fill(col.begin(), col.end(), NO_ALIGN);
+    return NO_ALIGN;
   }
+
+  int min_element = NO_ALIGN;
+  int previous_diag;
+  size_t start = lower;
+  if(lower == 0) {
+    previous_diag = col[0];
+    col[0] = col[0] + cost_map.gap_cost;
+    min_element = col[0];
+    start = 1;
+  } else {
+    previous_diag = col[lower - 1];
+  }
+
+  for(size_t i = start; i <= upper; ++i) {
+    int original = col[i];
+    int left = (i == lower) ? NO_ALIGN : col[i-1];
+    int match_cost = previous_diag + cost_map.char_cost_map.at(std::make_pair(query[i-1], static_cast<char>(branchval)));
+    int gap_in_query = left + cost_map.gap_cost;
+    int gap_in_target = original + cost_map.gap_cost;
+    int new_val = std::min({match_cost, gap_in_query, gap_in_target});
+    col[i] = new_val;
+    previous_diag = original;
+    if(new_val < min_element) min_element = new_val;
+  }
+
+  if(lower > 0) {
+    col[lower - 1] = NO_ALIGN;
+  }
+  for(size_t i = upper + 1; i < col.size(); ++i) col[i] = NO_ALIGN;
+
   return min_element;
 }
 
-TEMPLATE_LIST template <typename MT>
-void RADIXMAP_T::global_search_linear_impl(typename RADIXMAP_T::const_weak_pointer_type node, const std::vector<int> & previous_col, search_context & ctx, const MT & cost_map) {
-  if( *std::min_element(previous_col.begin(), previous_col.end()) > ctx.max_distance ) { return; }
-  if((node->terminal_idx != nullidx) && (previous_col.back() <= ctx.max_distance)) {
-    ctx.match.push_back(path(node));
-    ctx.distance.push_back(previous_col.back());
+inline void RadixMap::global_search_linear_impl(RadixMap::const_weak_pointer_type node,
+                                                const size_t node_depth,
+                                                const size_t char_depth,
+                                                search_context & ctx,
+                                                UnitWorkspace & workspace,
+                                                const CostMap & cost_map) {
+  workspace.ensure_child_slot(node_depth);
+  const size_t query_len = ctx.query.size();
+  const size_t band_radius = BandLimits::linear_radius(ctx.max_distance, cost_map.gap_cost, query_len);
+  const BandLimits band = BandLimits::around(char_depth, band_radius, query_len);
+
+  std::vector<int> & current_col = workspace.at(node_depth);
+  int current_col_min = NO_ALIGN;
+  if(band.lower <= band.upper) {
+    for(size_t i = band.lower; i <= band.upper; ++i) {
+      current_col_min = std::min(current_col_min, current_col[i]);
+    }
   }
+  if(current_col_min > ctx.max_distance) { return; }
+
+  const int terminal_distance = (band.upper == query_len) ? current_col.back() : NO_ALIGN;
+  if((node->terminal_idx != nullidx) && (terminal_distance <= ctx.max_distance)) {
+    ctx.match.push_back(path(node));
+    ctx.distance.push_back(terminal_distance);
+  }
+
   for (auto & ch : node->child_nodes) {
-    std::vector<int> current_col = previous_col;
-    branch_type & branch = ch.second->branch;
-    bool max_distance_exceeded = false;
-    for(size_t u=0; u<branch.size(); ++u) {
-      int current_dist = update_col_linear<MT>(branch[u], ctx.query, current_col, cost_map);
+    std::vector<int> & child_col = workspace.clone_from_parent(node_depth);
+    bool prune_child = false;
+    size_t child_char_depth = char_depth;
+    const branch_type & branch = ch.second->branch;
+    for(atomic_type branchval : branch) {
+      ++child_char_depth;
+      const BandLimits child_band = BandLimits::around(child_char_depth, band_radius, query_len);
+      const int current_dist = update_col_linear_banded(branchval, ctx.query, child_col, child_band.lower, child_band.upper, cost_map);
       if(current_dist > ctx.max_distance) {
-        max_distance_exceeded = true;
+        prune_child = true;
         break;
       }
     }
-    if(!max_distance_exceeded) global_search_linear_impl<MT>(ch.second.get(), current_col, ctx, cost_map);
+    if(!prune_child) {
+      global_search_linear_impl(ch.second.get(), node_depth + 1, child_char_depth, ctx, workspace, cost_map);
+    }
   }
 }
 
-TEMPLATE_LIST template <typename MT>
-void RADIXMAP_T::anchored_search_linear_impl(typename RADIXMAP_T::const_weak_pointer_type node, const std::vector<int> & previous_col, const int row_min, search_context & ctx, const MT & cost_map) {
-  int current_col_min = *std::min_element(previous_col.begin(), previous_col.end());
+inline void RadixMap::anchored_search_linear_impl(RadixMap::const_weak_pointer_type node,
+                                                  const size_t node_depth,
+                                                  const size_t char_depth,
+                                                  const int row_min,
+                                                  search_context & ctx,
+                                                  UnitWorkspace & workspace,
+                                                  const CostMap & cost_map) {
+  workspace.ensure_child_slot(node_depth);
+  const size_t query_len = ctx.query.size();
+  const size_t band_radius = BandLimits::linear_radius(ctx.max_distance, cost_map.gap_cost, query_len);
+  const BandLimits band = BandLimits::around(char_depth, band_radius, query_len);
+
+  std::vector<int> & current_col = workspace.at(node_depth);
+  int current_col_min = NO_ALIGN;
+  if(band.lower <= band.upper) {
+    for(size_t i = band.lower; i <= band.upper; ++i) {
+      current_col_min = std::min(current_col_min, current_col[i]);
+    }
+  }
+
   int current_row_min = row_min;
   if( (current_col_min > ctx.max_distance) && (current_row_min > ctx.max_distance) ) { // case 1
     return;
   } else if( (current_row_min <= ctx.max_distance) && (current_row_min <= current_col_min) ) { // case 2
-    // if row_min <= col_min then the search ends on the column
-    // we can stop, since it's impossible to find a smaller value by continuing the search
     std::vector<path> child_sequences = node->all();
-    for(auto & chs : child_sequences) { // also includes current node
+    for(auto & chs : child_sequences) {
       if(chs->terminal_idx != nullidx) {
         ctx.match.push_back(chs);
         ctx.distance.push_back(current_row_min);
       }
     }
     return;
-  } else if(node->terminal_idx != nullidx) { // this is a terminal leaf and its best value is on the col // case 3
+  } else if(node->terminal_idx != nullidx) { // case 3
     if(current_col_min <= ctx.max_distance) {
       ctx.match.push_back(path(node));
       ctx.distance.push_back(current_col_min);
     }
   }
+
+  const int parent_min = current_col_min;
   for (auto & ch : node->child_nodes) {
-    std::vector<int> current_col = previous_col;
-    branch_type & branch = ch.second->branch;
+    std::vector<int> & child_col = workspace.clone_from_parent(node_depth);
+    current_col_min = parent_min;
     bool max_distance_exceeded = false;
-    current_row_min = row_min;
-    for(size_t u=0; u<branch.size(); ++u) {
-      current_col_min = update_col_linear(branch[u], ctx.query, current_col, cost_map);
-      current_row_min = std::min(current_row_min, current_col.back());
-      if( (current_col_min > ctx.max_distance) && (current_row_min > ctx.max_distance) ) { // case 1
+    int child_row_min = row_min;
+    size_t child_char_depth = char_depth;
+    const branch_type & branch = ch.second->branch;
+    for(atomic_type branchval : branch) {
+      ++child_char_depth;
+      const BandLimits child_band = BandLimits::around(child_char_depth, band_radius, query_len);
+      current_col_min = update_col_linear_banded(branchval, ctx.query, child_col, child_band.lower, child_band.upper, cost_map);
+      const int terminal_candidate = (child_band.upper == query_len) ? child_col[query_len] : NO_ALIGN;
+      child_row_min = std::min(child_row_min, terminal_candidate);
+      if( (current_col_min > ctx.max_distance) && (child_row_min > ctx.max_distance) ) {
         max_distance_exceeded = true;
         break;
-      } else if( (current_row_min <= ctx.max_distance) && (current_row_min <= current_col_min) ) { // case 2
-        // if row_min <= col_min then the search ends on the column
-        // we can stop, since it's impossible to find a smaller value by continuing the search
-        max_distance_exceeded = true; // "exceeded" in the sense that we include all children below and don't need to keep searching
+      } else if( (child_row_min <= ctx.max_distance) && (child_row_min <= current_col_min) ) {
+        max_distance_exceeded = true;
         std::vector<path> grandchild_sequences = ch.second->all();
-        for(auto & gchs : grandchild_sequences) { // also includes ch node
+        for(auto & gchs : grandchild_sequences) {
           if(gchs->terminal_idx != nullidx) {
             ctx.match.push_back(gchs);
-            ctx.distance.push_back(current_row_min);
+            ctx.distance.push_back(child_row_min);
           }
         }
         break;
       }
-      // case 3 does not need to be considered since we are never on top of a terminal leaf within this loop
     }
-    if(!max_distance_exceeded) anchored_search_linear_impl(ch.second.get(), current_col, current_row_min, ctx, cost_map);
+    if(!max_distance_exceeded) {
+      anchored_search_linear_impl(ch.second.get(), node_depth + 1, child_char_depth, child_row_min, ctx, workspace, cost_map);
+    }
   }
 }
 
-TEMPLATE_LIST template <typename MT>
-int RADIXMAP_T::update_col_affine(const typename RADIXMAP_T::atomic_type branchval, const typename RADIXMAP_T::span_type query, affine_col_type & col, const MT & cost_map) {
+inline int RadixMap::update_col_affine_banded(const RadixMap::atomic_type branchval,
+                                              const RadixMap::span_type query,
+                                              affine_col_type & col,
+                                              size_t lower,
+                                              size_t upper,
+                                              const CostMap & cost_map) {
   auto & M_col =  std::get<0>(col); // match
   auto & X_col = std::get<1>(col); // gap in query
   auto & Y_col = std::get<2>(col); // gap in target
 
-  int previous_M_i_minus_1 = M_col[0];
-  int previous_X_i_minus_1 = X_col[0];
-  int previous_Y_i_minus_1 = Y_col[0];
+  const size_t col_size = M_col.size();
+  if(col_size == 0) return NO_ALIGN;
+  if(upper >= col_size) upper = col_size - 1;
 
-  M_col[0] = NO_ALIGN;
-  X_col[0] = previous_X_i_minus_1 == NO_ALIGN ? 
-              cost_map.at(pairchar_type(GAP_OPEN_CHAR, branchval)) : 
-              previous_X_i_minus_1 + cost_map.at(pairchar_type(GAP_EXTN_CHAR, branchval));
-  Y_col[0] = NO_ALIGN;
-  int min_element = X_col[0];
-  for(size_t i=1; i<M_col.size(); ++i) {
-    // Update col[i] after updating {previous_i_minus_1 <- col[i]}
-    int M_col_i = cost_map.at(pairchar_type(query[i-1], branchval)) + std::min({
-      previous_M_i_minus_1, 
-      previous_X_i_minus_1, 
-      previous_Y_i_minus_1});
+  if(lower > upper) {
+    std::fill(M_col.begin(), M_col.end(), NO_ALIGN);
+    std::fill(X_col.begin(), X_col.end(), NO_ALIGN);
+    std::fill(Y_col.begin(), Y_col.end(), NO_ALIGN);
+    return NO_ALIGN;
+  }
+
+  int min_element = NO_ALIGN;
+  int previous_M_i_minus_1;
+  int previous_X_i_minus_1;
+  int previous_Y_i_minus_1;
+  size_t start = lower;
+
+  if(lower == 0) {
+    previous_M_i_minus_1 = M_col[0];
+    previous_X_i_minus_1 = X_col[0];
+    previous_Y_i_minus_1 = Y_col[0];
+
+    M_col[0] = NO_ALIGN;
+    X_col[0] = previous_X_i_minus_1 == NO_ALIGN ? cost_map.gap_open_cost
+                                                : previous_X_i_minus_1 + cost_map.gap_cost;
+    Y_col[0] = NO_ALIGN;
+    min_element = std::min(min_element, X_col[0]);
+    start = 1;
+  } else {
+    previous_M_i_minus_1 = M_col[lower - 1];
+    previous_X_i_minus_1 = X_col[lower - 1];
+    previous_Y_i_minus_1 = Y_col[lower - 1];
+    for(size_t i = 0; i < lower; ++i) {
+      M_col[i] = NO_ALIGN;
+      X_col[i] = NO_ALIGN;
+      Y_col[i] = NO_ALIGN;
+    }
+  }
+
+  for(size_t i = start; i <= upper; ++i) {
+    int original_M = M_col[i];
+    int original_X = X_col[i];
+    int original_Y = Y_col[i];
+
+    int match_cost = cost_map.char_cost_map.at(std::make_pair(query[i-1], static_cast<char>(branchval)));
+    int M_col_i = match_cost + std::min({previous_M_i_minus_1, previous_X_i_minus_1, previous_Y_i_minus_1});
     int X_col_i = std::min({
-      cost_map.at(pairchar_type(GAP_OPEN_CHAR, branchval)) + M_col[i],
-      cost_map.at(pairchar_type(GAP_EXTN_CHAR, branchval)) + X_col[i],
-      cost_map.at(pairchar_type(GAP_OPEN_CHAR, branchval)) + Y_col[i]}); 
+      cost_map.gap_open_cost + original_M,
+      cost_map.gap_cost      + original_X,
+      cost_map.gap_open_cost + original_Y});
+    const bool at_band_top = (lower > 0 && i == lower);
+    const int prev_M_for_Y = at_band_top ? NO_ALIGN : M_col[i-1];
+    const int prev_X_for_Y = at_band_top ? NO_ALIGN : X_col[i-1];
+    const int prev_Y_for_Y = at_band_top ? NO_ALIGN : Y_col[i-1];
     int Y_col_i = std::min({
-      cost_map.at(pairchar_type(query[i-1], GAP_OPEN_CHAR)) + M_col[i-1],
-      cost_map.at(pairchar_type(query[i-1], GAP_OPEN_CHAR)) + X_col[i-1],
-      cost_map.at(pairchar_type(query[i-1], GAP_EXTN_CHAR)) + Y_col[i-1]});
-    previous_M_i_minus_1 = M_col[i];
-    previous_X_i_minus_1 = X_col[i];
-    previous_Y_i_minus_1 = Y_col[i];
+      cost_map.gap_open_cost + prev_M_for_Y,
+      cost_map.gap_open_cost + prev_X_for_Y,
+      cost_map.gap_cost      + prev_Y_for_Y});
+
+    previous_M_i_minus_1 = original_M;
+    previous_X_i_minus_1 = original_X;
+    previous_Y_i_minus_1 = original_Y;
+
     M_col[i] = M_col_i;
     X_col[i] = X_col_i;
     Y_col[i] = Y_col_i;
-    int current_min = std::min({M_col[i], X_col[i], Y_col[i]});
+    int current_min = std::min({M_col_i, X_col_i, Y_col_i});
     if(current_min < min_element) min_element = current_min;
   }
-  // print_vec(M_col);
-  // print_vec(X_col);
-  // print_vec(Y_col);
-  // std::cout << std::endl;
+
+  for(size_t i = upper + 1; i < col_size; ++i) {
+    M_col[i] = NO_ALIGN;
+    X_col[i] = NO_ALIGN;
+    Y_col[i] = NO_ALIGN;
+  }
+
   return min_element;
 }
 
-TEMPLATE_LIST template <typename MT>
-void RADIXMAP_T::global_search_affine_impl(typename RADIXMAP_T::const_weak_pointer_type node, const affine_col_type & previous_col, search_context & ctx, const MT & cost_map) {
-  if(
-    (*std::min_element(std::get<0>(previous_col).begin(), std::get<0>(previous_col).end()) > ctx.max_distance) &&
-    (*std::min_element(std::get<1>(previous_col).begin(), std::get<1>(previous_col).end()) > ctx.max_distance) &&
-    (*std::min_element(std::get<2>(previous_col).begin(), std::get<2>(previous_col).end()) > ctx.max_distance)      
-  ) { return; }
-  int previous_col_back = std::min({
-    std::get<0>(previous_col).back(),
-    std::get<1>(previous_col).back(),
-    std::get<2>(previous_col).back()});
-  if((node->terminal_idx != nullidx) && (previous_col_back <= ctx.max_distance)) {
-    ctx.match.push_back(path(node));
-    ctx.distance.push_back(previous_col_back);
+inline void RadixMap::global_search_affine_impl(RadixMap::const_weak_pointer_type node,
+                                                const size_t node_depth,
+                                                const size_t char_depth,
+                                                search_context & ctx,
+                                                AffineWorkspace & workspace,
+                                                const CostMap & cost_map) {
+  workspace.ensure_child_slot(node_depth);
+  const size_t query_len = ctx.query.size();
+  const size_t band_radius = BandLimits::affine_radius(ctx.max_distance, cost_map.gap_cost, cost_map.gap_open_cost, query_len);
+  const BandLimits band = BandLimits::around(char_depth, band_radius, query_len);
+
+  const affine_col_type & parent_column = workspace.at(node_depth);
+  const auto & M_col = std::get<0>(parent_column);
+  const auto & X_col = std::get<1>(parent_column);
+  const auto & Y_col = std::get<2>(parent_column);
+
+  int current_col_min = NO_ALIGN;
+  if(band.lower <= band.upper) {
+    for(size_t i = band.lower; i <= band.upper; ++i) {
+      current_col_min = std::min(current_col_min, std::min({M_col[i], X_col[i], Y_col[i]}));
+    }
   }
+  if(current_col_min > ctx.max_distance) { return; }
+
+  int terminal_distance = NO_ALIGN;
+  if(band.upper == query_len) {
+    terminal_distance = std::min({M_col[query_len], X_col[query_len], Y_col[query_len]});
+  }
+  if((node->terminal_idx != nullidx) && (terminal_distance <= ctx.max_distance)) {
+    ctx.match.push_back(path(node));
+    ctx.distance.push_back(terminal_distance);
+  }
+
   for (auto & ch : node->child_nodes) {
-    affine_col_type current_col = previous_col;
-    branch_type & branch = ch.second->branch;
+    affine_col_type & child_col = workspace.clone_from_parent(node_depth);
     bool max_distance_exceeded = false;
-    for(size_t u=0; u<branch.size(); ++u) {
-      int current_dist = update_col_affine<MT>(branch[u], ctx.query, current_col, cost_map);
+    size_t child_char_depth = char_depth;
+    const branch_type & branch = ch.second->branch;
+    for(atomic_type branchval : branch) {
+      ++child_char_depth;
+      const BandLimits child_band = BandLimits::around(child_char_depth, band_radius, query_len);
+      int current_dist = update_col_affine_banded(branchval, ctx.query, child_col, child_band.lower, child_band.upper, cost_map);
       if(current_dist > ctx.max_distance) {
         max_distance_exceeded = true;
         break;
       }
     }
-    if(!max_distance_exceeded) global_search_affine_impl<MT>(ch.second.get(), current_col, ctx, cost_map);
+    if(!max_distance_exceeded) {
+      global_search_affine_impl(ch.second.get(), node_depth + 1, child_char_depth, ctx, workspace, cost_map);
+    }
   }
 }
 
-TEMPLATE_LIST template <typename MT>
-void RADIXMAP_T::anchored_search_affine_impl(typename RADIXMAP_T::const_weak_pointer_type node, const affine_col_type & previous_col, const int row_min, search_context & ctx, const MT & cost_map) {
-  int current_col_min = std::min({
-    *std::min_element(std::get<0>(previous_col).begin(), std::get<0>(previous_col).end()),
-    *std::min_element(std::get<1>(previous_col).begin(), std::get<1>(previous_col).end()),
-    *std::min_element(std::get<2>(previous_col).begin(), std::get<2>(previous_col).end())});
+inline void RadixMap::anchored_search_affine_impl(RadixMap::const_weak_pointer_type node,
+                                                  const size_t node_depth,
+                                                  const size_t char_depth,
+                                                  const int row_min,
+                                                  search_context & ctx,
+                                                  AffineWorkspace & workspace,
+                                                  const CostMap & cost_map) {
+  workspace.ensure_child_slot(node_depth);
+  const size_t query_len = ctx.query.size();
+  const size_t band_radius = BandLimits::affine_radius(ctx.max_distance, cost_map.gap_cost, cost_map.gap_open_cost, query_len);
+  const BandLimits band = BandLimits::around(char_depth, band_radius, query_len);
+
+  const affine_col_type & parent_column = workspace.at(node_depth);
+  const auto & M_col = std::get<0>(parent_column);
+  const auto & X_col = std::get<1>(parent_column);
+  const auto & Y_col = std::get<2>(parent_column);
+
+  int current_col_min = NO_ALIGN;
+  if(band.lower <= band.upper) {
+    for(size_t i = band.lower; i <= band.upper; ++i) {
+      current_col_min = std::min(current_col_min, std::min({M_col[i], X_col[i], Y_col[i]}));
+    }
+  }
+
   int current_row_min = row_min;
   if( (current_col_min > ctx.max_distance) && (current_row_min > ctx.max_distance) ) { // case 1
     return;
   } else if( (current_row_min <= ctx.max_distance) && (current_row_min <= current_col_min) ) { // case 2
-    // if row_min <= col_min then the search ends on the column
-    // we can stop, since it's impossible to find a smaller value by continuing the search
     std::vector<path> child_sequences = node->all();
-    for(auto & chs : child_sequences) { // also includes current node
+    for(auto & chs : child_sequences) {
       if(chs->terminal_idx != nullidx) {
         ctx.match.push_back(chs);
         ctx.distance.push_back(current_row_min);
       }
     }
     return;
-  } else if(node->terminal_idx != nullidx) { // this is a terminal leaf and its best value is on the col // case 3
+  } else if(node->terminal_idx != nullidx) { // case 3
     if(current_col_min <= ctx.max_distance) {
       ctx.match.push_back(path(node));
       ctx.distance.push_back(current_col_min);
     }
   }
+
+  const int parent_min = current_col_min;
   for (auto & ch : node->child_nodes) {
-    affine_col_type current_col = previous_col;
-    branch_type & branch = ch.second->branch;
+    affine_col_type & child_col = workspace.clone_from_parent(node_depth);
+    current_col_min = parent_min;
     bool max_distance_exceeded = false;
-    current_row_min = row_min;
-    for(size_t u=0; u<branch.size(); ++u) {
-      current_col_min = update_col_affine(branch[u], ctx.query, current_col, cost_map);
-      int current_col_back = std::min({
-        std::get<0>(current_col).back(),
-        std::get<1>(current_col).back(),
-        std::get<2>(current_col).back()});
-      current_row_min = std::min(current_row_min, current_col_back);
-      if( (current_col_min > ctx.max_distance) && (current_row_min > ctx.max_distance) ) { // case 1
+    int child_row_min = row_min;
+    size_t child_char_depth = char_depth;
+    const branch_type & branch = ch.second->branch;
+    for(atomic_type branchval : branch) {
+      ++child_char_depth;
+      const BandLimits child_band = BandLimits::around(child_char_depth, band_radius, query_len);
+      current_col_min = update_col_affine_banded(branchval, ctx.query, child_col, child_band.lower, child_band.upper, cost_map);
+      int current_col_back = (child_band.upper == query_len)
+                               ? std::min({
+                                   std::get<0>(child_col)[query_len],
+                                   std::get<1>(child_col)[query_len],
+                                   std::get<2>(child_col)[query_len]})
+                               : NO_ALIGN;
+      child_row_min = std::min(child_row_min, current_col_back);
+      if( (current_col_min > ctx.max_distance) && (child_row_min > ctx.max_distance) ) { // case 1
         max_distance_exceeded = true;
         break;
-      } else if( (current_row_min <= ctx.max_distance) && (current_row_min <= current_col_min) ) { // case 2
-        // if row_min <= col_min then the search ends on the column
-        // we can stop, since it's impossible to find a smaller value by continuing the search
-        max_distance_exceeded = true; // "exceeded" in the sense that we include all children below and don't need to keep searching
+      } else if( (child_row_min <= ctx.max_distance) && (child_row_min <= current_col_min) ) { // case 2
+        max_distance_exceeded = true;
         std::vector<path> grandchild_sequences = ch.second->all();
-        for(auto & gchs : grandchild_sequences) { // also includes ch node
+        for(auto & gchs : grandchild_sequences) {
           if(gchs->terminal_idx != nullidx) {
             ctx.match.push_back(gchs);
-            ctx.distance.push_back(current_row_min);
+            ctx.distance.push_back(child_row_min);
           }
         }
         break;
       }
-      // case 3 does not need to be considered since we are never on top of a terminal leaf within this loop
     }
-    if(!max_distance_exceeded) anchored_search_affine_impl(ch.second.get(), current_col, current_row_min, ctx, cost_map);
+    if(!max_distance_exceeded) {
+      anchored_search_affine_impl(ch.second.get(), node_depth + 1, child_char_depth, child_row_min, ctx, workspace, cost_map);
+    }
   }
 }
 
-
-#undef TEMPLATE_LIST
-#undef RADIXMAP_T
+#undef CHAR_T
+#undef MAP_T
+#undef BRANCH_T
+#undef INDEX_T
 #undef GAP_CHAR
 #undef GAP_OPEN_CHAR
 #undef GAP_EXTN_CHAR
 #undef NO_ALIGN
-} // end namespace
 
-#endif // include guard
+} // namespace seqtrie
+
+#endif // seqtrie_RADIXMAP_H

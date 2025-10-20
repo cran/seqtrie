@@ -28,11 +28,13 @@ LogicalVector RadixForest_insert(RadixForestRXPtr xp, CharacterVector sequences)
       // the insert has to happen after initialization (emplace)
       // otherwise the address of the root will change and the tree will be invalid because a child will point to the old root
       forest.emplace(sequence.size(), SeqTrie::RadixTreeR());
-      forest[sequence.size()].insert(sequence, SeqTrie::posidx);
-      result_ptr[i] = 1;
+      SeqTrie::path p = forest[sequence.size()].insert(sequence, SeqTrie::posidx);
+      size_t idx = p.m ? p->get_terminal_idx() : SeqTrie::nullidx;
+      result_ptr[i] = (idx == SeqTrie::nullidx) ? 1 : 0; // TRUE if newly inserted
     } else {
-      it->second.insert(sequence, SeqTrie::posidx);
-      result_ptr[i] = 0;
+      SeqTrie::path p = it->second.insert(sequence, SeqTrie::posidx);
+      size_t idx = p.m ? p->get_terminal_idx() : SeqTrie::nullidx;
+      result_ptr[i] = (idx == SeqTrie::nullidx) ? 1 : 0; // TRUE if newly inserted
     }
   }
   return result;
@@ -73,7 +75,8 @@ LogicalVector RadixForest_find(RadixForestRXPtr xp, CharacterVector sequences) {
     cspan sequence = charsxp_to_cspan(sequence_ptr[i]);
     auto it = forest.find(sequence.size());
     if(it != forest.end()) {
-      size_t idx = it->second.find(sequence);
+      SeqTrie::path p = it->second.find(sequence);
+      size_t idx = p.m ? p->get_terminal_idx() : SeqTrie::nullidx;
       result_ptr[i] = idx == SeqTrie::nullidx ? 0 : 1; // nullidx means sequence was not found
     } else {
       result_ptr[i] = 0;

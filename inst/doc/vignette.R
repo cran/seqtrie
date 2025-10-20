@@ -5,25 +5,25 @@ knitr::opts_chunk$set(dpi=96,fig.width=6.5)
 library(seqtrie)
 
 ## ----basic_usage, eval=FALSE--------------------------------------------------
-#  results <- dist_search(x, y, max_distance = 2, nthreads = 1)
+# results <- dist_search(x, y, max_distance = 2, nthreads = 1)
 
 ## ----basic_plot, eval=!GITHUB_README && CAN_IGRAPH_PLOT, out.width=400--------
-tree <- RadixTree$new()
-tree$insert(c("cargo", "cart", "carburetor", "carbuncle", "bar", "zebra"))
-tree$erase("zebra")
-# tree$graph requires igraph package
-set.seed(1); tree$graph()
+# tree <- RadixTree$new()
+# tree$insert(c("cargo", "cart", "carburetor", "carbuncle", "bar", "zebra"))
+# tree$erase("zebra")
+# # tree$graph requires igraph package
+# set.seed(1); tree$graph()
 
 ## ----basic_plot_output, eval=GITHUB_README && CAN_IGRAPH_PLOT, echo=FALSE, message=FALSE, results='hide'----
-#  tree <- RadixTree$new()
-#  tree$insert(c("cargo", "cart", "carburetor", "carbuncle", "bar", "zebra"))
-#  tree$erase("zebra")
-#  png("simple_tree.png", width = 400*1.5, height = 300*1.5, res = 96)
-#  set.seed(1); tree$graph()
-#  dev.off()
+# tree <- RadixTree$new()
+# tree$insert(c("cargo", "cart", "carburetor", "carbuncle", "bar", "zebra"))
+# tree$erase("zebra")
+# png("simple_tree.png", width = 400*1.5, height = 300*1.5, res = 96)
+# set.seed(1); tree$graph()
+# dev.off()
 
 ## ----basic_plot_github, eval=GITHUB_README, echo=FALSE, results='asis'--------
-#  cat('![](vignettes/simple_tree.png "simple_tree")')
+# cat('![](vignettes/simple_tree.png "simple_tree")')
 
 ## ----small_cdr3_ex------------------------------------------------------------
 # 130,000 "CDR3" sequences
@@ -69,13 +69,31 @@ tree$search("CART", max_distance = 0, mode = "anchored")
 ## ----custom_search------------------------------------------------------------
 tree <- RadixTree$new()
 tree$insert(covid_cdr3)
-# define a custom distance matrix - generate_cost_matrix is a convienence function
-# gap and gap_open can be defined directly in the cost_matrix or as search method parameters
-cost_mat <- generate_cost_matrix("ACGT", match=0, mismatch=5, gap=2, gap_open=1)
+
+# Define a custom substitution matrix. Use generate_cost_matrix for convenience.
+cost_mat <- generate_cost_matrix("ACGT", match = 0, mismatch = 5)
 print(cost_mat)
-# Perform a search. "Mode" can be either global or anchored.
-results <- tree$search(covid_cdr3, max_distance=8, cost_matrix=cost_mat, mode="global", nthreads=2)
-dplyr::filter(results, query != target)
+
+# Set gap penalties via parameters (not in the matrix):
+# - Linear gaps: set gap_cost only
+# - Affine gaps: set both gap_cost and gap_open_cost
+
+# Linear example
+results_linear <- tree$search(covid_cdr3, max_distance = 8,
+                              mode = "global",
+                              cost_matrix = cost_mat,
+                              gap_cost = 2,
+                              nthreads = 2)
+
+# Affine example
+results_affine <- tree$search(covid_cdr3, max_distance = 8,
+                              mode = "global",
+                              cost_matrix = cost_mat,
+                              gap_cost = 2,
+                              gap_open_cost = 5,
+                              nthreads = 2)
+
+dplyr::filter(results_linear, query != target)
 
 ## ----radix_forest-------------------------------------------------------------
 # RadixTree, full data: 45 seconds

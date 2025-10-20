@@ -1,7 +1,7 @@
 Package: seqtrie
 Title: Radix Tree and Trie-Based String Distances
-Version: 0.2.9
-Date: 2025-03-01
+Version: 0.3.5
+Date: 2025-10-19
 Authors@R: c(
     person("Travers", "Ching", email = "traversc@gmail.com", role = c("aut", "cre", "cph")),
     person("Martin", "Moene", role = c("ctb", "cph"), comment = "span-lite C++ library"),
@@ -18,8 +18,7 @@ SystemRequirements: GNU make
 LinkingTo: Rcpp, RcppParallel, BH
 Imports: Rcpp (>= 0.12.18.3), RcppParallel (>= 5.1.3), R6, rlang,
         dplyr, stringi
-Suggests: knitr, rmarkdown, stringdist, qs, Biostrings, pwalign,
-        igraph, ggplot2
+Suggests: knitr, rmarkdown, stringdist, pwalign, igraph, ggplot2
 VignetteBuilder: knitr
 RoxygenNote: 7.3.2
 Copyright: This package includes code from the 'span-lite' library
@@ -31,11 +30,11 @@ Copyright: This package includes code from the 'span-lite' library
 URL: https://github.com/traversc/seqtrie
 BugReports: https://github.com/traversc/seqtrie/issues
 NeedsCompilation: yes
-Packaged: 2025-03-02 09:03:51 UTC; tching
+Packaged: 2025-10-20 06:51:53 UTC; tching
 Author: Travers Ching [aut, cre, cph],
   Martin Moene [ctb, cph] (span-lite C++ library),
   Steve Hanov [ctb] (Trie levenshtein implementation in Python),
   Martin Leitner-Ankerl [ctb] (Ankerl unordered dense hashmap)
 Maintainer: Travers Ching <traversc@gmail.com>
 Repository: CRAN
-Date/Publication: 2025-03-02 09:30:05 UTC
+Date/Publication: 2025-10-20 08:00:02 UTC

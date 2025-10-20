@@ -8,11 +8,10 @@ but is semi-global in that the end of the either the query sequence or target se
 
 In contrast a global alignment must align the entire query and target sequences. When mismatch and indel costs are equal to 1, this is also known as the Levenshtein distance.
 
-By default, if mode == "global" or "anchored", all mismatches and indels are given a cost of 1. However, you can define your own distance metric by setting the cost_matrix and gap parameters.
-The cost_matrix is a strictly positive square integer matrix and should include all characters in query and target as column- and rownames.
-To set the cost of a gap (insertion or deletion) you can include a row and column named "gap" in the cost_matrix _OR_ set the gap_cost parameter (a single positive integer).
-Similarly, the affine gap alignment can be set by including a row and column named "gap_open" in the cost_matrix _OR_ setting the gap_open_cost parameter (a single positive integer).
-If affine alignment is used, the cost of a gap is defined as:
+By default, if mode == "global" or "anchored", all mismatches and indels are given a cost of 1. However, you can define your own distance metric by setting the substitution cost_matrix and separate gap parameters.
+The cost_matrix is a strictly positive square integer matrix of substitution costs and should include all characters in query and target as column- and rownames. Any rows/columns named "gap" or "gap_open" are ignored.
+To set the cost of a gap (insertion or deletion), use the gap_cost parameter (a single positive integer). To enable affine gaps, provide the gap_open_cost parameter (a single positive integer) in addition to gap_cost.
+If affine alignment is used, the total cost of a gap of length L is defined as:
 TOTAL_GAP_COST = gap_open_cost + (gap_cost * gap_length).
 
 If mode == "hamming" all alignment parameters are ignored; mismatch is given a distance of 1 and gaps are not allowed.
@@ -59,6 +58,14 @@ is_integerlike <- function(x) {
   }
 }
 
+is_missing_arg <- function(x) {
+  is.null(x) || (length(x) == 1L && is.na(x))
+}
+
+recycle_arg <- function(recycle_vector, target_vector) {
+  rep(recycle_vector, length.out = length(target_vector))
+}
+
 # A cost matrix must
 # 1) Be a square matrix _OR_ NULL
 # 2) If gap_cost is NULL, cost_matrix must have a "gap" entry instead
@@ -102,21 +109,20 @@ check_cost_matrix <- function(cost_matrix, gap_cost, gap_open_cost, charset, dia
     stop("Cost matrix must have zeros on the diagonal")
   }
 
-  # gap params, cost_matrix is defined
-  gap_is_valid <- is_integerlike(gap_cost) && length(gap_cost) == 1 && gap_cost > 0
-  cost_matrix_has_gap <- "gap" %in% rnames
-  if (!gap_is_valid && !cost_matrix_has_gap) {
-    stop("Cost matrix must have a 'gap' entry or gap_cost must be a single positive integer")
+  # gap parameters are provided separately in the R APIs now
+  # validate gap_cost / gap_open_cost here, independent of matrix contents
+  if (!is_missing_arg(gap_cost)) {
+    if (!(is_integerlike(gap_cost) && length(gap_cost) == 1 && gap_cost > 0)) {
+      stop("gap_cost must be a single positive integer when provided")
+    }
   }
-  gap_open_is_null <- is.null(gap_open_cost)
-  gap_open_is_valid <- is_integerlike(gap_open_cost) && length(gap_open_cost) == 1 && gap_open_cost > 0
-  cost_matrix_has_gap_open <- "gap_open" %in% rnames
-  if (!gap_open_is_null && !gap_open_is_valid && !cost_matrix_has_gap_open) {
-    stop("If gap_open_cost is defined, it must be a single positive integer")
-  }
-
-  if ((gap_open_is_valid || cost_matrix_has_gap_open) && !(gap_is_valid || cost_matrix_has_gap)) {
-    stop("If gap_open is defined, gap must also be defined")
+  if (!is_missing_arg(gap_open_cost)) {
+    if (!(is_integerlike(gap_open_cost) && length(gap_open_cost) == 1 && gap_open_cost >= 0)) {
+      stop("gap_open_cost must be a single non-negative integer when provided")
+    }
+    if (is_missing_arg(gap_cost)) {
+      stop("If gap_open_cost is defined, gap_cost must also be defined")
+    }
   }
 }
 
@@ -129,11 +135,13 @@ check_cost_matrix <- function(cost_matrix, gap_cost, gap_open_cost, charset, dia
 # Internal function only, not exported
 check_alignment_params <- function(mode, cost_matrix, gap_cost, gap_open_cost, charset, diag_must_be_zero) {
   mode <- tolower(mode)
-  if (!mode %in% c("hamming", "global", "anchored", "gb", "lv", "an", "levenshtein", "lv")) {
+  if (!mode %in% c("hamming", "hm",
+                   "global", "gb", "levenshtein", "lv",
+                   "anchored", "an", "extension", "en")) {
     stop("mode must be one of hamming (hm), global (gb, lv, levenshtein) or anchored (an, en, extension)")
   }
   check_cost_matrix(cost_matrix, gap_cost, gap_open_cost, charset, diag_must_be_zero)
-  if ((mode %in% c("hamming", "hm")) && (!is.null(cost_matrix) || !is.null(gap_cost) || !is.null(gap_open_cost))) {
+  if ((mode %in% c("hamming", "hm")) && (!is.null(cost_matrix) || !is_missing_arg(gap_cost) || !is_missing_arg(gap_open_cost))) {
     warning("cost_matrix and gap parameters are ignored when mode is 'hamming'")
   }
 }
@@ -152,132 +160,58 @@ normalize_mode_parameter <- function(mode) {
   mode
 }
 
-# This function finalizes the cost matrix for input into the C++ functions
-# The input to the C++ function is a single cost_matrix parameter and does not include gap_cost and gap_open_cost parameters
-# The finalized cost matrix can be any of the following:
-# 1) NULL -- implies linear alignment (mismatches = 1, gaps = 1)
-# 2) A square matrix with "gap" column -- implies linear alignment with a custom cost for mismatches and gaps
-# 3) A square matrix with "gap" and "gap_open" columns -- implies affine alignment with a custom cost for mismatches, gaps and gap openings
-# In this third case, the cost of a gap is added to the gap_open cost to get the total cost of the initial gap.
-# TOTAL_GAP_COST = gap_open_cost + (gap_cost * [gap_length-1])
-# Note this is different than how it is defined for the R interface, which is more intuitive
-# Assume parameters were properly checked by check_alignment_params
-# Internal function only, not exported
-finalize_cost_matrix <- function(cost_matrix, gap_cost, gap_open_cost) {
-  if (is.null(cost_matrix)) {
-    return(NULL)
-  }
-
-  mode(cost_matrix) <- "integer"
-  # Add gap to finalized matrix
-  if (is.null(gap_cost)) {
-    # do nothing, cost_matrix must already has a "gap" entry
-  } else if ("gap" %in% rownames(cost_matrix)) {
-    # replace gap entry in cost matrix with gap_cost
-    cost_matrix[, "gap"] <- cost_matrix["gap", ] <- gap_cost
-  } else {
-    # append gap_cost to cost matrix
-    cost_matrix_with_gap <- matrix(gap_cost, nrow = nrow(cost_matrix) + 1, ncol = nrow(cost_matrix) + 1)
-    colnames(cost_matrix_with_gap) <- rownames(cost_matrix_with_gap) <- c(rownames(cost_matrix), "gap")
-    cost_matrix_with_gap[seq_len(nrow(cost_matrix)), seq_len(nrow(cost_matrix))] <- cost_matrix
-    cost_matrix <- cost_matrix_with_gap
-  }
-
-  # Add gap_open to finalized matrix
-  if (is.null(gap_open_cost)) {
-    # do nothing, gap_open is optional
-  } else if ("gap_open" %in% rownames(cost_matrix)) {
-    # replace gap_open entry in cost matrix with gap_open_cost
-    cost_matrix[, "gap_open"] <- cost_matrix["gap_open", ] <- gap_open_cost
-  } else {
-    # append gap_open_cost to cost matrix
-    cost_matrix_with_gap_open <- matrix(gap_open_cost, nrow = nrow(cost_matrix) + 1, ncol = nrow(cost_matrix) + 1)
-    colnames(cost_matrix_with_gap_open) <- rownames(cost_matrix_with_gap_open) <- c(rownames(cost_matrix), "gap_open")
-    cost_matrix_with_gap_open[seq_len(nrow(cost_matrix)), seq_len(nrow(cost_matrix))] <- cost_matrix
-    cost_matrix <- cost_matrix_with_gap_open
-  }
-
-  # Add the cost of gap to gap_open in finalized matrix
-  if ("gap_open" %in% rownames(cost_matrix)) {
-    cost_matrix["gap_open", ] <- cost_matrix["gap_open", ] + cost_matrix["gap", ]
-    cost_matrix[, "gap_open"] <- cost_matrix[, "gap_open"] + cost_matrix[, "gap"]
-  }
-
-  # Set gap to gap entries as NA_integer_ since they can never be used in an alignment
-  cost_matrix["gap", "gap"] <- NA_integer_
-  if ("gap_open" %in% rownames(cost_matrix)) {
-    cost_matrix["gap_open", "gap"] <- NA_integer_
-    cost_matrix["gap", "gap_open"] <- NA_integer_
-    cost_matrix["gap_open", "gap_open"] <- NA_integer_
-  }
-  cost_matrix
-}
-
-# This function returns either "linear" or "affine" depending on the finalized cost matrix
-# Internal function only, not exported
-get_gap_type <- function(finalized_cost_matrix) {
-  if (is.null(finalized_cost_matrix)) {
-    return("linear")
-  } else if ("gap_open" %in% rownames(finalized_cost_matrix) && "gap" %in% rownames(finalized_cost_matrix)) {
-    return("affine")
-  } else {
-    return("linear")
-  }
-}
-
 #' @title Generate a simple cost matrix
-#' @description Generate a cost matrix for use with the \code{search} method
-#' @param charset A string representing all possible characters in both query and target sequences (e.g. "ACGT")
-#' @param match The cost of a match
-#' @param mismatch The cost of a mismatch
-#' @param gap The cost of a gap or NULL if this parameter will be set later.
-#' @param gap_open The cost of a gap opening or NULL. If this parameter is set, gap must also be set.
-#' @return A cost matrix
+#' @description Generate a cost matrix for use with the \code{search} method.
+#' @param charset A string of all allowed characters in both query and target sequences (e.g. \code{"ACGT"}).
+#' @param ambiguity_base A single character (e.g. \code{"N"}) that will match any character in \code{charset} at the cost of \code{match}.  Defaults to \code{NULL}.
+#' @param match Integer cost of a match.
+#' @param mismatch Integer cost of a mismatch.
+#' @return A square cost matrix with row- and column-names given by \code{charset}, plus the optional \code{ambiguity_base}. Gap costs are no longer included here; pass \code{gap_cost} and \code{gap_open_cost} to distance/search functions.
 #' @examples
 #' generate_cost_matrix("ACGT", match = 0, mismatch = 1)
+#' generate_cost_matrix("ACGT", ambiguity_base = "N", match = 0, mismatch = 1)
 #' @export
-generate_cost_matrix <- function(charset, match = 0L, mismatch = 1L, gap = NULL, gap_open = NULL) {
-  charset <- strsplit(charset, "")[[1]]
-  gap_is_defined <- !is.null(gap)
-  gap_open_is_defined <- !is.null(gap_open)
+generate_cost_matrix <- function(charset,
+                                 ambiguity_base = NULL,
+                                 match       = 0L,
+                                 mismatch    = 1L) 
+{
+  # split into vector of single chars
+  chars <- strsplit(charset, "")[[1]]
+  
+  # handle single ambiguity base
+  if (!is.null(ambiguity_base)) {
+    if (!is.character(ambiguity_base) || nchar(ambiguity_base) != 1L) {
+      stop("`ambiguity_base` must be a single character, e.g. 'N'")
+    }
+    amb <- ambiguity_base
+    # add to charset if not already present
+    if (!amb %in% chars) {
+      chars <- c(chars, amb)
+    }
+  }
 
+  # check integer-like costs
   if (!is_integerlike(match) || !is_integerlike(mismatch)) {
-    stop("Cost parameters must have integer values")
-  }
-  if (gap_is_defined && !is_integerlike(gap)) {
-    stop("Cost parameters must have integer values")
-  }
-  if (gap_open_is_defined && !is_integerlike(gap_open)) {
-    stop("Cost parameters must have integer values")
+    stop("match and mismatch must be integer-like")
   }
 
-  if (gap_open_is_defined && gap_is_defined) {
-    charset <- c(charset, "gap", "gap_open")
-  } else if (gap_is_defined) {
-    charset <- c(charset, "gap")
-  } else if (gap_open_is_defined) {
-    stop("If gap_open is defined, gap must also be defined")
-  }
-  n <- length(charset)
-  x <- matrix(nrow = n, ncol = n)
-  rownames(x) <- charset
-  colnames(x) <- charset
+  # initialize matrix
+  n <- length(chars)
+  x <- matrix(0L, nrow = n, ncol = n, dimnames = list(chars, chars))
+
+  # set mismatch off-diagonal, match on-diagonal
   x[lower.tri(x)] <- mismatch
   x[upper.tri(x)] <- mismatch
-  diag(x) <- match
-  if (gap_open_is_defined) {
-    x["gap", ] <- gap
-    x[, "gap"] <- gap
-    x["gap_open", ] <- gap_open
-    x[, "gap_open"] <- gap_open
-    x["gap", "gap"] <- 0L
-    x["gap_open", "gap"] <- 0L
-    x["gap", "gap_open"] <- 0L
-    x["gap_open", "gap_open"] <- 0L
-  } else if (gap_is_defined) {
-    x["gap", ] <- gap
-    x[, "gap"] <- gap
-    x["gap", "gap"] <- 0L
+  diag(x)         <- match
+
+  # override ambiguity_base interactions to always be 'match'
+  if (!is.null(ambiguity_base)) {
+    others <- setdiff(chars, amb)
+    x[amb, others] <- match
+    x[others, amb] <- match
+    x[amb, amb]    <- match
   }
+
   x
 }

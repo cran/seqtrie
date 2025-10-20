@@ -17,11 +17,10 @@ but is semi-global in that the end of the either the query sequence or target se
 
 In contrast a global alignment must align the entire query and target sequences. When mismatch and indel costs are equal to 1, this is also known as the Levenshtein distance.
 
-By default, if mode == "global" or "anchored", all mismatches and indels are given a cost of 1. However, you can define your own distance metric by setting the cost_matrix and gap parameters.
-The cost_matrix is a strictly positive square integer matrix and should include all characters in query and target as column- and rownames.
-To set the cost of a gap (insertion or deletion) you can include a row and column named "gap" in the cost_matrix \emph{OR} set the gap_cost parameter (a single positive integer).
-Similarly, the affine gap alignment can be set by including a row and column named "gap_open" in the cost_matrix \emph{OR} setting the gap_open_cost parameter (a single positive integer).
-If affine alignment is used, the cost of a gap is defined as:
+By default, if mode == "global" or "anchored", all mismatches and indels are given a cost of 1. However, you can define your own distance metric by setting the substitution cost_matrix and separate gap parameters.
+The cost_matrix is a strictly positive square integer matrix of substitution costs and should include all characters in query and target as column- and rownames. Any rows/columns named "gap" or "gap_open" are ignored.
+To set the cost of a gap (insertion or deletion), use the gap_cost parameter (a single positive integer). To enable affine gaps, provide the gap_open_cost parameter (a single positive integer) in addition to gap_cost.
+If affine alignment is used, the total cost of a gap of length L is defined as:
 TOTAL_GAP_COST = gap_open_cost + (gap_cost * gap_length).
 
 If mode == "hamming" all alignment parameters are ignored; mismatch is given a distance of 1 and gaps are not allowed.
@@ -64,6 +63,7 @@ https://en.wikipedia.org/wiki/Radix_tree
 \item \href{#method-RadixTree-find}{\code{RadixTree$find()}}
 \item \href{#method-RadixTree-prefix_search}{\code{RadixTree$prefix_search()}}
 \item \href{#method-RadixTree-search}{\code{RadixTree$search()}}
+\item \href{#method-RadixTree-single_gap_search}{\code{RadixTree$single_gap_search()}}
 \item \href{#method-RadixTree-validate}{\code{RadixTree$validate()}}
 }
 }
@@ -72,11 +72,11 @@ https://en.wikipedia.org/wiki/Radix_tree
 \if{latex}{\out{\hypertarget{method-RadixTree-new}{}}}
 \subsection{Method \code{new()}}{
 Create a new RadixTree object
-\subsection{Usage}{
+\subsection{Usage - new}{
 \if{html}{\out{<div class="r">}}\preformatted{RadixTree$new(sequences = NULL)}\if{html}{\out{</div>}}
 }
 
-\subsection{Arguments}{
+\subsection{Arguments - new}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
 \item{\code{sequences}}{A character vector of sequences to insert into the tree}
@@ -89,7 +89,7 @@ Create a new RadixTree object
 \if{latex}{\out{\hypertarget{method-RadixTree-show}{}}}
 \subsection{Method \code{show()}}{
 Print the tree to screen
-\subsection{Usage}{
+\subsection{Usage - show}{
 \if{html}{\out{<div class="r">}}\preformatted{RadixTree$show()}\if{html}{\out{</div>}}
 }
 
@@ -99,11 +99,11 @@ Print the tree to screen
 \if{latex}{\out{\hypertarget{method-RadixTree-to_string}{}}}
 \subsection{Method \code{to_string()}}{
 Print the tree to a string
-\subsection{Usage}{
+\subsection{Usage - to_string}{
 \if{html}{\out{<div class="r">}}\preformatted{RadixTree$to_string()}\if{html}{\out{</div>}}
 }
 
-\subsection{Returns}{
+\subsection{Returns - to_string}{
 A string representation of the tree
 }
 }
@@ -112,11 +112,11 @@ A string representation of the tree
 \if{latex}{\out{\hypertarget{method-RadixTree-graph}{}}}
 \subsection{Method \code{graph()}}{
 Plot of the tree using igraph (needs to be installed separately)
-\subsection{Usage}{
+\subsection{Usage - graph}{
 \if{html}{\out{<div class="r">}}\preformatted{RadixTree$graph(depth = -1, root_label = "root", plot = TRUE)}\if{html}{\out{</div>}}
 }
 
-\subsection{Arguments}{
+\subsection{Arguments - graph}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
 \item{\code{depth}}{The tree depth to plot. If -1 (default), plot the entire tree.}
@@ -127,7 +127,7 @@ Plot of the tree using igraph (needs to be installed separately)
 }
 \if{html}{\out{</div>}}
 }
-\subsection{Returns}{
+\subsection{Returns - graph}{
 A data frame of parent-child relationships used to generate the igraph plot OR a ggplot2 object
 }
 }
@@ -136,11 +136,11 @@ A data frame of parent-child relationships used to generate the igraph plot OR a
 \if{latex}{\out{\hypertarget{method-RadixTree-to_vector}{}}}
 \subsection{Method \code{to_vector()}}{
 Output all sequences held by the tree as a character vector
-\subsection{Usage}{
+\subsection{Usage - to_vector}{
 \if{html}{\out{<div class="r">}}\preformatted{RadixTree$to_vector()}\if{html}{\out{</div>}}
 }
 
-\subsection{Returns}{
+\subsection{Returns - to_vector}{
 A character vector of all sequences contained in the tree. Return order is not guaranteed.
 }
 }
@@ -149,11 +149,11 @@ A character vector of all sequences contained in the tree. Return order is not g
 \if{latex}{\out{\hypertarget{method-RadixTree-size}{}}}
 \subsection{Method \code{size()}}{
 Output the size of the tree (i.e. how many sequences are contained)
-\subsection{Usage}{
+\subsection{Usage - size}{
 \if{html}{\out{<div class="r">}}\preformatted{RadixTree$size()}\if{html}{\out{</div>}}
 }
 
-\subsection{Returns}{
+\subsection{Returns - size}{
 The size of the tree
 }
 }
@@ -162,18 +162,18 @@ The size of the tree
 \if{latex}{\out{\hypertarget{method-RadixTree-insert}{}}}
 \subsection{Method \code{insert()}}{
 Insert new sequences into the tree
-\subsection{Usage}{
+\subsection{Usage - insert}{
 \if{html}{\out{<div class="r">}}\preformatted{RadixTree$insert(sequences)}\if{html}{\out{</div>}}
 }
 
-\subsection{Arguments}{
+\subsection{Arguments - insert}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
 \item{\code{sequences}}{A character vector of sequences to insert into the tree}
 }
 \if{html}{\out{</div>}}
 }
-\subsection{Returns}{
+\subsection{Returns - insert}{
 A logical vector indicating whether the sequence was inserted (TRUE) or already existing in the tree (FALSE)
 }
 }
@@ -182,18 +182,18 @@ A logical vector indicating whether the sequence was inserted (TRUE) or already 
 \if{latex}{\out{\hypertarget{method-RadixTree-erase}{}}}
 \subsection{Method \code{erase()}}{
 Erase sequences from the tree
-\subsection{Usage}{
+\subsection{Usage - erase}{
 \if{html}{\out{<div class="r">}}\preformatted{RadixTree$erase(sequences)}\if{html}{\out{</div>}}
 }
 
-\subsection{Arguments}{
+\subsection{Arguments - erase}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
 \item{\code{sequences}}{A character vector of sequences to erase from the tree}
 }
 \if{html}{\out{</div>}}
 }
-\subsection{Returns}{
+\subsection{Returns - erase}{
 A logical vector indicating whether the sequence was erased (TRUE) or not found in the tree (FALSE)
 }
 }
@@ -202,18 +202,18 @@ A logical vector indicating whether the sequence was erased (TRUE) or not found 
 \if{latex}{\out{\hypertarget{method-RadixTree-find}{}}}
 \subsection{Method \code{find()}}{
 Find sequences in the tree
-\subsection{Usage}{
+\subsection{Usage - find}{
 \if{html}{\out{<div class="r">}}\preformatted{RadixTree$find(query)}\if{html}{\out{</div>}}
 }
 
-\subsection{Arguments}{
+\subsection{Arguments - find}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
 \item{\code{query}}{A character vector of sequences to find in the tree}
 }
 \if{html}{\out{</div>}}
 }
-\subsection{Returns}{
+\subsection{Returns - find}{
 A logical vector indicating whether the sequence was found (TRUE) or not found in the tree (FALSE)
 }
 }
@@ -223,18 +223,18 @@ A logical vector indicating whether the sequence was found (TRUE) or not found i
 \subsection{Method \code{prefix_search()}}{
 Search for sequences in the tree that start with a specified prefix.
 E.g.: a query of "CAR" will find "CART", "CARBON", "CARROT", etc. but not "CATS".
-\subsection{Usage}{
+\subsection{Usage - prefix_search}{
 \if{html}{\out{<div class="r">}}\preformatted{RadixTree$prefix_search(query)}\if{html}{\out{</div>}}
 }
 
-\subsection{Arguments}{
+\subsection{Arguments - prefix_search}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
 \item{\code{query}}{A character vector of sequences to search for in the tree}
 }
 \if{html}{\out{</div>}}
 }
-\subsection{Returns}{
+\subsection{Returns - prefix_search}{
 A data frame of all matches with columns "query" and "target".
 }
 }
@@ -243,21 +243,21 @@ A data frame of all matches with columns "query" and "target".
 \if{latex}{\out{\hypertarget{method-RadixTree-search}{}}}
 \subsection{Method \code{search()}}{
 Search for sequences in the tree that are with a specified distance metric to a specified query.
-\subsection{Usage}{
+\subsection{Usage - search}{
 \if{html}{\out{<div class="r">}}\preformatted{RadixTree$search(
   query,
   max_distance = NULL,
   max_fraction = NULL,
   mode = "levenshtein",
   cost_matrix = NULL,
-  gap_cost = NULL,
-  gap_open_cost = NULL,
+  gap_cost = NA_integer_,
+  gap_open_cost = NA_integer_,
   nthreads = 1,
   show_progress = FALSE
 )}\if{html}{\out{</div>}}
 }
 
-\subsection{Arguments}{
+\subsection{Arguments - search}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
 \item{\code{query}}{A character vector of query sequences.}
@@ -280,9 +280,43 @@ Search for sequences in the tree that are with a specified distance metric to a 
 }
 \if{html}{\out{</div>}}
 }
-\subsection{Returns}{
+\subsection{Returns - search}{
 The output is a data.frame of all matches with columns "query" and "target".
 For anchored searches, the output also includes attributes "query_size" and "target_size" which are vectors containing the portion of the query and target sequences that are aligned.
+}
+}
+\if{html}{\out{<hr>}}
+\if{html}{\out{<a id="method-RadixTree-single_gap_search"></a>}}
+\if{latex}{\out{\hypertarget{method-RadixTree-single_gap_search}{}}}
+\subsection{Method \code{single_gap_search()}}{
+A specialized algorithm for searching for sequences allowing at most a single gap within the alignment itself. The mode is always "anchored" and does not penalize end gaps.
+\subsection{Usage - single_gap_search}{
+\if{html}{\out{<div class="r">}}\preformatted{RadixTree$single_gap_search(
+  query,
+  max_distance,
+  gap_cost = 1L,
+  nthreads = 1,
+  show_progress = FALSE
+)}\if{html}{\out{</div>}}
+}
+
+\subsection{Arguments - single_gap_search}{
+\if{html}{\out{<div class="arguments">}}
+\describe{
+\item{\code{query}}{A character vector of query sequences.}
+
+\item{\code{max_distance}}{how far to search in units of absolute distance. Can be a single value or a vector. Mutually exclusive with max_fraction.}
+
+\item{\code{gap_cost}}{The cost of a gap for use with the "global" or "anchored" distance metrics. See details.}
+
+\item{\code{nthreads}}{The number of threads to use for parallel computation.}
+
+\item{\code{show_progress}}{Whether to show a progress bar.}
+}
+\if{html}{\out{</div>}}
+}
+\subsection{Returns - single_gap_search}{
+The output is a data.frame of matches with columns "query", "target" and "distance".
 }
 }
 \if{html}{\out{<hr>}}
@@ -290,11 +324,11 @@ For anchored searches, the output also includes attributes "query_size" and "tar
 \if{latex}{\out{\hypertarget{method-RadixTree-validate}{}}}
 \subsection{Method \code{validate()}}{
 Validate the tree
-\subsection{Usage}{
+\subsection{Usage - validate}{
 \if{html}{\out{<div class="r">}}\preformatted{RadixTree$validate()}\if{html}{\out{</div>}}
 }
 
-\subsection{Returns}{
+\subsection{Returns - validate}{
 A logical indicating whether the tree is valid (TRUE) or not (FALSE). This is mostly an internal function for debugging purposes and should always return TRUE.
 }
 }

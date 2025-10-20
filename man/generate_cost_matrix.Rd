@@ -4,31 +4,24 @@
 \alias{generate_cost_matrix}
 \title{Generate a simple cost matrix}
 \usage{
-generate_cost_matrix(
-  charset,
-  match = 0L,
-  mismatch = 1L,
-  gap = NULL,
-  gap_open = NULL
-)
+generate_cost_matrix(charset, ambiguity_base = NULL, match = 0L, mismatch = 1L)
 }
 \arguments{
-\item{charset}{A string representing all possible characters in both query and target sequences (e.g. "ACGT")}
+\item{charset}{A string of all allowed characters in both query and target sequences (e.g. \code{"ACGT"}).}
 
-\item{match}{The cost of a match}
+\item{ambiguity_base}{A single character (e.g. \code{"N"}) that will match any character in \code{charset} at the cost of \code{match}.  Defaults to \code{NULL}.}
 
-\item{mismatch}{The cost of a mismatch}
+\item{match}{Integer cost of a match.}
 
-\item{gap}{The cost of a gap or NULL if this parameter will be set later.}
-
-\item{gap_open}{The cost of a gap opening or NULL. If this parameter is set, gap must also be set.}
+\item{mismatch}{Integer cost of a mismatch.}
 }
 \value{
-A cost matrix
+A square cost matrix with row- and column-names given by \code{charset}, plus the optional \code{ambiguity_base}. Gap costs are no longer included here; pass \code{gap_cost} and \code{gap_open_cost} to distance/search functions.
 }
 \description{
-Generate a cost matrix for use with the \code{search} method
+Generate a cost matrix for use with the \code{search} method.
 }
 \examples{
 generate_cost_matrix("ACGT", match = 0, mismatch = 1)
+generate_cost_matrix("ACGT", ambiguity_base = "N", match = 0, mismatch = 1)
 }
