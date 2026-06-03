@@ -1,74 +1,58 @@
 ## ----setup, echo=FALSE--------------------------------------------------------
 GITHUB_README <- Sys.getenv("GITHUB_README") != ""
-CAN_IGRAPH_PLOT <- requireNamespace("igraph", quietly=TRUE) && requireNamespace("ggplot2", quietly=TRUE)
 knitr::opts_chunk$set(dpi=96,fig.width=6.5)
 library(seqtrie)
 
 ## ----basic_usage, eval=FALSE--------------------------------------------------
-# results <- dist_search(x, y, max_distance = 2, nthreads = 1)
+# data(covid_cdr3)
+# results <- dist_search(covid_cdr3, max_distance = 3,
+#                        nthreads = 8, tree_class = "StarTree")
 
-## ----basic_plot, eval=!GITHUB_README && CAN_IGRAPH_PLOT, out.width=400--------
-# tree <- RadixTree$new()
-# tree$insert(c("cargo", "cart", "carburetor", "carbuncle", "bar", "zebra"))
-# tree$erase("zebra")
-# # tree$graph requires igraph package
-# set.seed(1); tree$graph()
+## ----tree_benchmark, eval=!GITHUB_README, echo=FALSE, out.width="100%", fig.cap="Global edit-distance self-join benchmark with max_distance = 3 and nthreads = 8."----
+knitr::include_graphics("vignette_benchmark.png")
 
-## ----basic_plot_output, eval=GITHUB_README && CAN_IGRAPH_PLOT, echo=FALSE, message=FALSE, results='hide'----
-# tree <- RadixTree$new()
-# tree$insert(c("cargo", "cart", "carburetor", "carbuncle", "bar", "zebra"))
-# tree$erase("zebra")
-# png("simple_tree.png", width = 400*1.5, height = 300*1.5, res = 96)
-# set.seed(1); tree$graph()
-# dev.off()
+## ----tree_benchmark_github, eval=GITHUB_README, echo=FALSE, results='asis'----
+# cat('![](vignettes/vignette_benchmark.png "vignette_benchmark")')
+
+## ----basic_plot, eval=FALSE---------------------------------------------------
+# tree <- radix_tree()
+# insert(tree, c("cargo", "cart", "carburetor", "carbuncle", "bar", "zebra"))
+# erase(tree, "zebra")
+# # plot_tree requires igraph and ggplot2
+# set.seed(1); plot_tree(tree)
+
+## ----basic_plot_static, eval=!GITHUB_README, echo=FALSE, out.width=400--------
+knitr::include_graphics("simple_tree.png")
 
 ## ----basic_plot_github, eval=GITHUB_README, echo=FALSE, results='asis'--------
 # cat('![](vignettes/simple_tree.png "simple_tree")')
 
-## ----small_cdr3_ex------------------------------------------------------------
+## ----cdr3_setup, echo=FALSE---------------------------------------------------
 # 130,000 "CDR3" sequences
 set.seed(1)
 data(covid_cdr3)
 covid_cdr3 <- sample(covid_cdr3, 1000)
-tree <- RadixTree$new()
-tree$insert(covid_cdr3)
-# Full data: 1 min
-results <- tree$search(covid_cdr3, max_distance=2, mode="levenshtein", nthreads=2)
-
-# Alternatively, instead of using the RadixTree object directly, you can use the
-# dist_search function, which is a wrapper around the RadixTree object.
-results <- dist_search(covid_cdr3, covid_cdr3, max_distance=2)
-
-# The output is a data.frame mapping query (search sequences)
-# and target (sequences inserted into the tree).
-dplyr::filter(results, query != target)
-
-## ----lv_search----------------------------------------------------------------
-# Full data: several seconds
-results <- tree$search(covid_cdr3, max_fraction=0.035, mode="levenshtein", nthreads=2)
-# Full data: 1 minute
-results <- tree$search(covid_cdr3, max_fraction=0.06, mode="levenshtein", nthreads=2)
-# Full data: 15-20 minutes
-results <- tree$search(covid_cdr3, max_fraction=0.15, mode="levenshtein", nthreads=2)
+tree <- radix_tree()
+insert(tree, covid_cdr3)
 
 ## ----hm_search----------------------------------------------------------------
-# Full data: 1 second
-results <- tree$search(covid_cdr3, max_fraction=0.035, mode="hamming", nthreads=2)
-# Full data: several seconds
-results <- tree$search(covid_cdr3, max_fraction=0.06, mode="hamming", nthreads=2)
-# Full data: 1.5 minutes
-results <- tree$search(covid_cdr3, max_fraction=0.15, mode="hamming", nthreads=2)
+results <- align_search(tree, covid_cdr3, max_fraction = 0.035,
+                        mode = "hamming", nthreads = 2)
+results <- align_search(tree, covid_cdr3, max_fraction = 0.06,
+                        mode = "hamming", nthreads = 2)
+results <- align_search(tree, covid_cdr3, max_fraction = 0.15,
+                        mode = "hamming", nthreads = 2)
 
 ## ----anchored_search----------------------------------------------------------
-tree <- RadixTree$new()
-tree$insert("CARTON")
-tree$insert("CAR")
-tree$insert("CARBON")
-tree$search("CART", max_distance = 0, mode = "anchored")
+tree <- radix_tree()
+insert(tree, "CARTON")
+insert(tree, "CAR")
+insert(tree, "CARBON")
+align_search(tree, "CART", max_distance = 0, mode = "anchored")
 
 ## ----custom_search------------------------------------------------------------
-tree <- RadixTree$new()
-tree$insert(covid_cdr3)
+tree <- radix_tree()
+insert(tree, covid_cdr3)
 
 # Define a custom substitution matrix. Use generate_cost_matrix for convenience.
 cost_mat <- generate_cost_matrix("ACGT", match = 0, mismatch = 5)
@@ -79,38 +63,65 @@ print(cost_mat)
 # - Affine gaps: set both gap_cost and gap_open_cost
 
 # Linear example
-results_linear <- tree$search(covid_cdr3, max_distance = 8,
-                              mode = "global",
-                              cost_matrix = cost_mat,
-                              gap_cost = 2,
-                              nthreads = 2)
+results_linear <- align_search(tree, covid_cdr3, max_distance = 8,
+                               mode = "global",
+                               cost_matrix = cost_mat,
+                               gap_cost = 2,
+                               nthreads = 2)
 
 # Affine example
-results_affine <- tree$search(covid_cdr3, max_distance = 8,
-                              mode = "global",
-                              cost_matrix = cost_mat,
-                              gap_cost = 2,
-                              gap_open_cost = 5,
-                              nthreads = 2)
+results_affine <- align_search(tree, covid_cdr3, max_distance = 8,
+                               mode = "global",
+                               cost_matrix = cost_mat,
+                               gap_cost = 2,
+                               gap_open_cost = 5,
+                               nthreads = 2)
 
-dplyr::filter(results_linear, query != target)
+results_linear[results_linear$query != results_linear$target, , drop = FALSE]
 
-## ----radix_forest-------------------------------------------------------------
-# RadixTree, full data: 45 seconds
-tree <- RadixTree$new()
-tree$insert(covid_cdr3)
-results_tree <- tree$search(covid_cdr3, max_distance=2, mode="levenshtein", nthreads=2)
-# RadixForest, full data: 19 seconds
-frst <- RadixForest$new()
-frst$insert(covid_cdr3)
-results_frst <- frst$search(covid_cdr3, max_distance=2, mode="levenshtein", nthreads=2)
-# The results are the same, but order is not guaranteed
-identical(
-  dplyr::arrange(results_tree, query, target),
-  dplyr::arrange(results_frst, query, target) )
+## ----startree-----------------------------------------------------------------
+st <- star_tree(c("ACGT", "ACGA", "AAAA", "AAAT"),
+                max_distance = 1,
+                mismatch_cost = 1,
+                gap_cost = 1,
+                nthreads = 2)
+result(st)
 
-## ----prefix_search------------------------------------------------------------
-tree <- RadixTree$new()
-tree$insert(c("cargo", "cart", "carburetor", "carbuncle", "bar"))
-tree$prefix_search("car")
+# Search another query set using the same fixed costs and threshold.
+align_search(st, c("ACGT", "AAAC"))
+
+# The same path is available through dist_search().
+dist_search(c("ACGT", "ACGA", "AAAA", "AAAT"),
+            max_distance = 1,
+            tree_class = "StarTree")
+
+## ----anchored_startree--------------------------------------------------------
+ast <- star_tree(c("ACGT", "ACG", "AAAA", "AA"),
+                 max_distance = 1,
+                 mode = "anchored",
+                 mismatch_cost = 1,
+                 gap_cost = 1,
+                 nthreads = 2)
+result(ast)
+
+align_search(ast, c("ACGT", "AA"))
+
+dist_search(c("ACGT", "ACG", "AAAA", "AA"),
+            max_distance = 1,
+            mode = "anchored",
+            tree_class = "StarTree")
+
+## ----hamming_startree---------------------------------------------------------
+hst <- star_tree(c("ACGT", "ACGA", "TCGT", "ACG"),
+                 max_distance = 1,
+                 mode = "hamming",
+                 nthreads = 2)
+result(hst)
+
+align_search(hst, c("ACGT", "TTGT"))
+
+dist_search(c("ACGT", "ACGA", "TCGT", "ACG"),
+            max_distance = 1,
+            mode = "hamming",
+            tree_class = "StarTree")
 

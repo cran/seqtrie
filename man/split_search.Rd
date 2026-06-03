@@ -11,7 +11,12 @@ split_search(
   target_split,
   edge_trim = 0L,
   max_distance = 0L,
-  ...
+  max_fraction = NULL,
+  cost_matrix = NULL,
+  gap_cost = NA_integer_,
+  gap_open_cost = NA_integer_,
+  nthreads = 1,
+  show_progress = FALSE
 )
 }
 \arguments{
@@ -21,26 +26,36 @@ split_search(
 
 \item{query_split}{index to split query sequence. Should be within (edge_trim, nchar(query)-edge_trim] or -1 to indicate no split.}
 
-\item{target_split}{index to split target sequence. Should be within (edge_trim, nchar(query)-edge_trim] or -1 to indicate no split.}
+\item{target_split}{index to split target sequence. Should be within (edge_trim, nchar(target)-edge_trim] or -1 to indicate no split.}
 
 \item{edge_trim}{number of bases to trim from each side of the sequence (default value: 0).}
 
-\item{max_distance}{how far to search in units of absolute distance. Can be a single value or a vector. Mutually exclusive with max_fraction.}
+\item{max_distance}{How far to search in units of absolute distance. Can be a single value or a vector. Mutually exclusive with max_fraction.}
 
-\item{...}{additional arguments passed to \code{RadixTree$search}}
+\item{max_fraction}{How far to search in units of relative distance to each query sequence length. Can be a single value or a vector. Mutually exclusive with max_distance.}
+
+\item{cost_matrix}{A custom cost matrix for use with the "global" or "anchored" distance metrics. See details.}
+
+\item{gap_cost}{The cost of a gap for use with the "global" or "anchored" distance metrics. See details.}
+
+\item{gap_open_cost}{The cost of a gap opening. See details.}
+
+\item{nthreads}{The number of threads to use for parallel computation.}
+
+\item{show_progress}{Whether to show a progress bar.}
 }
 \value{
-data.frame with columns query, target, and distance.
+A data frame with columns query, target, and distance.
 }
 \description{
 Search for similar sequences based on splitting sequences into left and right sides
-and searching for matches in each side using a bi-directional anchored alignment.
+and searching for matches on each side using a bidirectional anchored alignment.
 }
 \details{
-This function is useful for searching for similar sequences that may have variable windows of sequencing (e.g. different 5' and 3' primers)
+This function is useful for searching for similar sequences that may have variable sequencing windows (e.g. different 5' and 3' primers)
 but contain the same core sequence or position.
 The two split parameters partition the query and target sequences into left and right sides,
-where left = stri_sub(sequence, edge_trim+1, split) and right = stri_sub(query, split+1, -edge_trim-1).
+where left = rev(substr(sequence, edge_trim+1, split)) and right = substr(sequence, split+1, nchar(sequence)-edge_trim).
 }
 \examples{
 # Consider two sets of sequences
@@ -48,7 +63,7 @@ where left = stri_sub(sequence, edge_trim+1, split) and right = stri_sub(query, 
 # target1 AAGACCTAA CC
 # query2   GGGTGTAA CCACCC
 # target2   GGTGTAA CCAC
-# Despite having different frames, query1 and query2 and clearly 
+# Despite having different frames, query1 and query2 can clearly
 # match to target1 and target2, respectively.
 # One could consider splitting based on a common core sequence, 
 # e.g. a common TAA stop codon. 
